@@ -5,11 +5,19 @@ import { App } from "../../app/App";
 import { existingGameId } from "../../test/onlineFixtures";
 
 vi.mock("./data/defaultRepository", async () => {
-  const { onlineGameFixture, existingGameId } =
+  const { onlineGameFixture, existingGameId, playerSessionFixture } =
     await import("../../test/onlineFixtures");
   return {
     defaultOnlineRepository: {
       createGame: vi.fn(async () => onlineGameFixture()),
+      createWithSeat: vi.fn(async (id: string) =>
+        playerSessionFixture(onlineGameFixture({ id }), "w"),
+      ),
+      loadSession: vi.fn(async (id: string) =>
+        playerSessionFixture(onlineGameFixture({ id }), "w"),
+      ),
+      joinGame: vi.fn(),
+      submitMove: vi.fn(),
       getGame: vi.fn(async (id: string) =>
         id === existingGameId ? onlineGameFixture() : null,
       ),
@@ -18,6 +26,7 @@ vi.mock("./data/defaultRepository", async () => {
 });
 
 it("navigates from lobby to a saved game URL and supports reopening that URL", async () => {
+  vi.spyOn(crypto, "randomUUID").mockReturnValue(existingGameId);
   window.history.replaceState(null, "", "/#/online");
   const user = userEvent.setup();
   const { unmount } = render(<App />);

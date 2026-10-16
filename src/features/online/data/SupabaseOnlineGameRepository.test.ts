@@ -113,3 +113,46 @@ describe("Supabase repository using real SDK and mocked HTTP", () => {
     ).not.toBeNull();
   });
 });
+
+it("uses a token-bearing POST for the seat and the Edge Function for moves, never a client commit RPC", async () => {
+  const session = {
+    game: databaseRow(),
+    player_color: "w",
+    identity: "recognized",
+  };
+  const h = setup({ code: "OK", session });
+  const token = "a".repeat(64);
+  await h.repository.createWithSeat(existingGameId, "white", token);
+  await h.repository.submitMove(
+    existingGameId,
+    token,
+    { from: "e2", to: "e4" },
+    2,
+  );
+  const calls = h.fetch.mock.calls as unknown as [string, RequestInit][];
+  expect(String(calls[0][0])).toContain("/rpc/create_online_game_with_seat");
+  expect(String(calls[1][0])).toContain("/functions/v1/submit-online-move");
+  expect(String(calls[1][0])).not.toContain(token);
+  expect(JSON.parse(String(calls[1][1].body))).toEqual({
+    game_id: existingGameId,
+    player_token: token,
+    expected_version: 2,
+    from: "e2",
+    to: "e4",
+  });
+  expect(
+    calls.some(([url]) => String(url).includes("commit_online_move")),
+  ).toBe(false);
+});
+
+it("maps an Edge version conflict to a typed domain error", async () => {
+  const h = setup({ code: "VERSION_CONFLICT", message: "stale" }, 409);
+  await expect(
+    h.repository.submitMove(
+      existingGameId,
+      "a".repeat(64),
+      { from: "e2", to: "e4" },
+      2,
+    ),
+  ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+});

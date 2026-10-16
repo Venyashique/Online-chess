@@ -9,6 +9,12 @@ export type OnlineGameRecord = {
   creatorColor: Color;
   version: number;
   state: SerializedGame;
+  seats?: {
+    creatorJoinedAt: string | null;
+    opponentJoinedAt: string | null;
+    legacy: boolean;
+  };
+  updatedAt?: string;
 };
 export type OnlineGame = OnlineGameRecord & {
   secondPlayerColor: Color;
@@ -26,3 +32,34 @@ export interface OnlineGameRepository {
 
 export const isGameId = (id: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+export type PlayerSessionRecord = {
+  game: OnlineGameRecord;
+  playerColor: Color | null;
+  identity: "recognized" | "none" | "invalid" | "legacy";
+};
+export interface OnlinePlayerRepository extends OnlineGameRepository {
+  createWithSeat(
+    id: string,
+    choice: CreatorColorChoice,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<PlayerSessionRecord>;
+  loadSession(
+    id: string,
+    token: string | null,
+    signal?: AbortSignal,
+  ): Promise<PlayerSessionRecord | null>;
+  joinGame(
+    id: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<PlayerSessionRecord>;
+  submitMove(
+    id: string,
+    token: string,
+    move: import("../../../shared/chess/domain/types").MoveAction,
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<PlayerSessionRecord>;
+}

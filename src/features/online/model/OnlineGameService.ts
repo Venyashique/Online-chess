@@ -13,7 +13,7 @@ export class OnlineGameNotFoundError extends Error {
   }
 }
 
-function restoreRecord(record: OnlineGameRecord): OnlineGame {
+export function restoreOnlineRecord(record: OnlineGameRecord): OnlineGame {
   const position = restoreGame(record.state).snapshot();
   return {
     ...record,
@@ -34,7 +34,9 @@ export class OnlineGameService {
     choice: CreatorColorChoice,
     signal?: AbortSignal,
   ): Promise<OnlineGame> {
-    return restoreRecord(await this.repository.createGame(choice, signal));
+    return restoreOnlineRecord(
+      await this.repository.createGame(choice, signal),
+    );
   }
 
   async loadGame(id: string, signal?: AbortSignal): Promise<OnlineGame> {
@@ -43,6 +45,6 @@ export class OnlineGameService {
     if (!record) throw new OnlineGameNotFoundError();
     if (record.id.toLowerCase() !== id.toLowerCase())
       throw new Error("Хранилище вернуло другую партию.");
-    return restoreRecord(record);
+    return restoreOnlineRecord(record);
   }
 }

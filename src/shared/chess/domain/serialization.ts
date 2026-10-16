@@ -1,5 +1,5 @@
-import { ChessGame } from "./ChessGame";
-import type { MoveAction } from "./types";
+import { ChessGame } from "./ChessGame.ts";
+import type { MoveAction } from "./types.ts";
 
 export type SerializedGame = { initialFen: string; moves: MoveAction[] };
 

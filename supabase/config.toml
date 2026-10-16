@@ -1,0 +1,6 @@
+project_id = "online-chess"
+
+# A browser anon/publishable key is not a player identity. The handler performs
+# mandatory seat-token authorization via SQL; no Supabase Auth account is used.
+[functions.submit-online-move]
+verify_jwt = false

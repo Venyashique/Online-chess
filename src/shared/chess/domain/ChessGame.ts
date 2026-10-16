@@ -1,5 +1,10 @@
 import { Chess } from "chess.js";
-import type { GameResult, GameSnapshot, MoveAction, Promotion } from "./types";
+import type {
+  GameResult,
+  GameSnapshot,
+  MoveAction,
+  Promotion,
+} from "./types.ts";
 
 function promotionOf(piece: string | undefined): Promotion | undefined {
   return piece === "q" || piece === "r" || piece === "b" || piece === "n"

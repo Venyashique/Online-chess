@@ -1,9 +1,11 @@
+import { PromotionDialog } from "../../shared/chess/ui/PromotionDialog";
+import type { PlayerIdentity } from "./identity/PlayerIdentityStore";
 import { useState } from "react";
 import { Board2D } from "../../shared/chess/ui/Board2D";
 import { gameStatus } from "../../shared/chess/session/status";
 import { defaultOnlineRepository } from "./data/defaultRepository";
 import { useOnlineGame } from "./model/useOnlineGame";
-import type { CreatorColorChoice, OnlineGameRepository } from "./model/types";
+import type { CreatorColorChoice, OnlinePlayerRepository } from "./model/types";
 import "./online.css";
 
 export const openOnlineGame = (id: string) => {
@@ -14,18 +16,19 @@ function invitationUrl(id: string) {
   url.hash = `/online/${id}`;
   return url.href;
 }
-const noMoves = () => {};
 
 export function OnlinePage({
   gameId,
   repository = defaultOnlineRepository,
   onCreated = openOnlineGame,
+  identity,
 }: {
   gameId?: string;
-  repository?: OnlineGameRepository | null;
+  repository?: OnlinePlayerRepository | null;
   onCreated?: (id: string) => void;
+  identity?: PlayerIdentity;
 } = {}) {
-  const session = useOnlineGame(repository, gameId, onCreated);
+  const session = useOnlineGame(repository, gameId, onCreated, identity);
   const [color, setColor] = useState<CreatorColorChoice>("white");
   const [copyStatus, setCopyStatus] = useState("");
   const game = session.game;
@@ -64,9 +67,9 @@ export function OnlinePage({
             <span className="eyebrow">Первый шаг к общей партии</span>
             <h2 id="create-title">Ваша следующая встреча</h2>
             <p>
-              Партия получит постоянную ссылку. Сейчас доступен просмотр
-              сохранённой позиции; ходы и подключение второго игрока появятся
-              позже.
+              Пригласите друга по ссылке. После того как он займёт свободный
+              цвет, можно играть. Обновляйте позицию вручную, чтобы увидеть
+              ответ соперника.
             </p>
           </div>
           <form
@@ -116,6 +119,7 @@ export function OnlinePage({
             <button
               type="button"
               className="online-text-button"
+              disabled={!!session.action || session.phase === "loading"}
               onClick={session.reload}
             >
               Повторить загрузку
@@ -153,12 +157,16 @@ export function OnlinePage({
             <section className="online-board" aria-label="Сохранённая позиция">
               <Board2D
                 position={game.position}
-                onMove={noMoves}
-                disabled
-                orientation={game.creatorColor}
+                onMove={session.requestMove}
+                disabled={!session.canMove || !!session.pendingPromotion}
+                orientation={session.playerColor ?? game.creatorColor}
               />
               <p className="online-readonly">
-                Просмотр партии. Ходы пока недоступны.
+                {session.action === "move"
+                  ? "Подтверждаем ход…"
+                  : session.canMove
+                    ? "Ваш ход. Выберите фигуру и клетку назначения."
+                    : "После хода соперника нажмите «Обновить позицию»."}
               </p>
             </section>
             <aside
@@ -171,8 +179,55 @@ export function OnlinePage({
                     ? "Партия завершена"
                     : game.status === "waiting"
                       ? "Партия создана"
-                      : "Сохранённая партия"}
+                      : "Партия идёт"}
                 </span>
+                <div className="online-seat-status">
+                  {game.seats?.legacy ? (
+                    <p>
+                      Партия 4A: только просмотр. Создайте новую, чтобы играть.
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        {game.seats?.opponentJoinedAt
+                          ? "Соперник подключился"
+                          : "Ожидаем второго игрока"}
+                      </p>
+                      {session.playerColor ? (
+                        <p className="your-color">
+                          Вы играете{" "}
+                          {session.playerColor === "w" ? "белыми" : "чёрными"}
+                        </p>
+                      ) : (
+                        <>
+                          <p>Вы просматриваете партию.</p>
+                          {!game.seats?.opponentJoinedAt &&
+                            !game.position.result && (
+                              <button
+                                type="button"
+                                className="online-primary"
+                                disabled={
+                                  !!session.action ||
+                                  session.phase === "loading"
+                                }
+                                onClick={() => void session.joinGame()}
+                              >
+                                {session.action === "join"
+                                  ? "Занимаем место…"
+                                  : "Занять свободный цвет"}
+                              </button>
+                            )}
+                          {!!game.seats?.opponentJoinedAt && (
+                            <p>Оба места заняты.</p>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                  {session.identityNotice && (
+                    <p className="online-small">{session.identityNotice}</p>
+                  )}
+                </div>
                 <p className="online-game-status" role="status">
                   {gameStatus(game.position)}
                 </p>
@@ -196,6 +251,7 @@ export function OnlinePage({
                 <button
                   type="button"
                   className="online-text-button"
+                  disabled={!!session.action || session.phase === "loading"}
                   onClick={session.reload}
                 >
                   Обновить позицию
@@ -237,6 +293,14 @@ export function OnlinePage({
             </aside>
           </div>
         </>
+      )}
+      {session.pendingPromotion && game && (
+        <PromotionDialog
+          color={game.position.turn}
+          choices={session.pendingPromotion.choices}
+          onChoose={session.promote}
+          onCancel={session.cancelPromotion}
+        />
       )}
     </main>
   );

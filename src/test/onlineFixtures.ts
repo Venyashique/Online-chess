@@ -12,6 +12,11 @@ export function onlineGameFixture(
     creatorColorChoice: "white",
     creatorColor: "w",
     version: 1,
+    seats: {
+      creatorJoinedAt: "2026-10-16T12:00:00Z",
+      opponentJoinedAt: null,
+      legacy: false,
+    },
     state: { initialFen: new ChessGame().snapshot().fen, moves: [] },
     ...overrides,
   };
@@ -25,5 +30,15 @@ export function databaseRow(record = onlineGameFixture()) {
     creator_color_choice: record.creatorColorChoice,
     creator_color: record.creatorColor,
     version: record.version,
+    creator_joined_at: record.seats?.creatorJoinedAt ?? null,
+    opponent_joined_at: record.seats?.opponentJoinedAt ?? null,
+    legacy: record.seats?.legacy ?? true,
   };
+}
+
+export function playerSessionFixture(
+  game = onlineGameFixture(),
+  playerColor: "w" | "b" | null = null,
+): import("../features/online/model/types").PlayerSessionRecord {
+  return { game, playerColor, identity: playerColor ? "recognized" : "none" };
 }

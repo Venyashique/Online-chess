@@ -13,6 +13,7 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": [
       "vite/client",
       "node",
@@ -20,5 +21,9 @@
       "@testing-library/jest-dom"
     ]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "supabase/functions/submit-online-move/handler.ts"
+  ]
 }
