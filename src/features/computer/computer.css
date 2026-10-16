@@ -1,0 +1,277 @@
+.game-page {
+  padding: 28px 0 50px;
+}
+.game-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 28px;
+}
+.game-heading h1 {
+  font-size: 36px;
+  letter-spacing: -1.3px;
+  margin: 12px 0 15px;
+}
+.stage-badge {
+  font-size: 11px;
+  border: 1px solid #d9dfd1;
+  border-radius: 20px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+.game-notice {
+  font-size: 13px;
+  color: #657362;
+  line-height: 1.7;
+  margin: 0 0 28px;
+  max-width: 700px;
+}
+.game-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr);
+  gap: 38px;
+  align-items: start;
+  max-width: 1040px;
+}
+.play-area {
+  min-width: 0;
+}
+.player-label {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 0 10px 22px;
+}
+.player-label > span:last-child {
+  margin-left: auto;
+  font-weight: 400;
+  color: #788371;
+  font-size: 10px;
+}
+.player-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #53654b;
+}
+.black-player {
+  background: #293c32;
+}
+.white-player {
+  background: #fff9e9;
+}
+.board-help {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #798370;
+  padding-left: 22px;
+  margin: 10px 0 0;
+}
+.game-sidebar {
+  display: grid;
+  gap: 20px;
+  padding-top: 33px;
+  min-width: 0;
+}
+.game-panel {
+  border: 1px solid #dce2d5;
+  background: #fdfcf8;
+  border-radius: 12px;
+  padding: 23px;
+}
+.game-status {
+  font-size: 22px;
+  line-height: 1.4;
+  margin: 15px 0 24px;
+  letter-spacing: -0.5px;
+}
+.status-check {
+  color: #a33d2d;
+}
+.difficulty-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.game-panel select {
+  font: inherit;
+  font-size: 13px;
+  padding: 12px;
+  width: 100%;
+  border: 1px solid #ced7c6;
+  background: #f6f7f1;
+  color: #294c3d;
+  border-radius: 6px;
+}
+.game-panel select:focus-visible,
+.game-page button:focus-visible {
+  outline: 3px solid #7058a5;
+  outline-offset: 3px;
+}
+.difficulty-help {
+  font-size: 11px;
+  color: #7b8572;
+  margin: 9px 0 22px;
+}
+.new-game-button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 14px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  background: #294c3d;
+  cursor: pointer;
+}
+.new-game-button:hover {
+  background: #3c654f;
+}
+.move-error {
+  font-size: 12px;
+  color: #a33d2d;
+  line-height: 1.6;
+  margin-bottom: 0;
+}
+.history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.history-heading h2 {
+  font-size: 17px;
+  letter-spacing: -0.3px;
+  margin: 0;
+}
+.history-heading > span {
+  font-size: 10px;
+  color: #7b8572;
+}
+.history-empty {
+  font-size: 12px;
+  color: #7b8572;
+  line-height: 1.9;
+  padding: 15px 0;
+}
+.history-scroll {
+  max-height: 300px;
+  overflow: auto;
+  margin-top: 16px;
+}
+.history-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.history-scroll th,
+.history-scroll td {
+  padding: 9px 8px;
+}
+.history-scroll thead {
+  font-size: 10px;
+  color: #7b8572;
+  background: #f2f3ec;
+  position: sticky;
+  top: 0;
+}
+.history-scroll tbody th {
+  color: #7b8572;
+  font-weight: 400;
+}
+.history-scroll tbody tr:nth-child(even) {
+  background: #f4f5ef;
+}
+@media (max-width: 850px) {
+  .game-layout {
+    gap: 22px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
+  }
+  .game-panel {
+    padding: 18px;
+  }
+  .game-heading h1 {
+    font-size: 30px;
+  }
+  .stage-badge {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .game-page {
+    padding-top: 23px;
+  }
+  .game-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .game-heading h1 {
+    font-size: 29px;
+  }
+  .game-heading {
+    margin-top: 25px;
+  }
+  .game-notice {
+    font-size: 12px;
+    margin-bottom: 15px;
+  }
+  .game-sidebar {
+    padding-top: 0;
+    gap: 14px;
+  }
+  .game-status {
+    margin: 12px 0 20px;
+  }
+  .board-help {
+    font-size: 10px;
+  }
+  .player-label > span:last-child {
+    font-size: 9px;
+  }
+  .game-panel {
+    padding: 20px;
+  }
+  .history-scroll {
+    max-height: 220px;
+  }
+}
+
+.new-game-button {
+  touch-action: manipulation;
+}
+
+.color-label {
+  margin-top: 18px;
+}
+.engine-error {
+  color: #a33d2d;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.engine-error .text-button {
+  padding-left: 0;
+}
+.check-notice {
+  color: #a33d2d;
+  font-size: 12px;
+}
+.engine-credit {
+  font-size: 10px;
+  color: #788371;
+  line-height: 1.7;
+  margin-top: 26px;
+}
+.engine-credit a {
+  text-decoration: underline;
+}
