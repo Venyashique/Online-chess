@@ -8,6 +8,7 @@ vi.mock("./data/defaultRepository", async () => {
   const { onlineGameFixture, existingGameId, playerSessionFixture } =
     await import("../../test/onlineFixtures");
   return {
+    defaultOnlineRealtime: null,
     defaultOnlineRepository: {
       createGame: vi.fn(async () => onlineGameFixture()),
       createWithSeat: vi.fn(async (id: string) =>

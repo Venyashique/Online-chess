@@ -1,9 +1,10 @@
+import type { OnlineRealtimeClient } from "./realtime/types";
 import { PromotionDialog } from "../../shared/chess/ui/PromotionDialog";
 import type { PlayerIdentity } from "./identity/PlayerIdentityStore";
 import { useState } from "react";
 import { Board2D } from "../../shared/chess/ui/Board2D";
 import { gameStatus } from "../../shared/chess/session/status";
-import { defaultOnlineRepository } from "./data/defaultRepository";
+import { defaultOnlineRepository, defaultOnlineRealtime } from "./data/defaultRepository";
 import { useOnlineGame } from "./model/useOnlineGame";
 import type { CreatorColorChoice, OnlinePlayerRepository } from "./model/types";
 import "./online.css";
@@ -22,13 +23,15 @@ export function OnlinePage({
   repository = defaultOnlineRepository,
   onCreated = openOnlineGame,
   identity,
+  realtime = repository === defaultOnlineRepository ? defaultOnlineRealtime : null,
 }: {
   gameId?: string;
   repository?: OnlinePlayerRepository | null;
   onCreated?: (id: string) => void;
   identity?: PlayerIdentity;
+  realtime?: OnlineRealtimeClient | null;
 } = {}) {
-  const session = useOnlineGame(repository, gameId, onCreated, identity);
+  const session = useOnlineGame(repository, gameId, onCreated, identity, realtime);
   const [color, setColor] = useState<CreatorColorChoice>("white");
   const [copyStatus, setCopyStatus] = useState("");
   const game = session.game;
@@ -68,8 +71,7 @@ export function OnlinePage({
             <h2 id="create-title">Ваша следующая встреча</h2>
             <p>
               Пригласите друга по ссылке. После того как он займёт свободный
-              цвет, можно играть. Обновляйте позицию вручную, чтобы увидеть
-              ответ соперника.
+              цвет, можно играть. Ходы соперника и история обновляются автоматически.
             </p>
           </div>
           <form
@@ -149,6 +151,10 @@ export function OnlinePage({
             <p className="copy-status" aria-live="polite">
               {copyStatus}
             </p>
+            <p className="online-connection" aria-live="polite" data-connection={session.connection}>
+              {session.connection === "online" ? "Онлайн" : session.connection === "offline" ? "Нет соединения" : "Переподключение…"}
+            </p>
+            {session.syncError && <p className="online-small">{session.syncError}</p>}
             <p className="link-note">
               Любой, у кого есть эта ссылка, может просматривать партию.
             </p>
@@ -166,7 +172,7 @@ export function OnlinePage({
                   ? "Подтверждаем ход…"
                   : session.canMove
                     ? "Ваш ход. Выберите фигуру и клетку назначения."
-                    : "После хода соперника нажмите «Обновить позицию»."}
+                    : "Ожидаем ход соперника. Позиция обновляется автоматически."}
               </p>
             </section>
             <aside

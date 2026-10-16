@@ -327,3 +327,8 @@
   cursor: default;
   opacity: 0.55;
 }
+
+.online-connection { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: #788371; margin: 6px 0; }
+.online-connection::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #a68a61; }
+.online-connection[data-connection='online'] { color: #476e47; }
+.online-connection[data-connection='online']::before { background: #74965f; }

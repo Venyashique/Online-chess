@@ -1,3 +1,5 @@
+import { OnlineGameSync } from "../realtime/OnlineGameSync";
+import type { OnlineConnectionStatus, OnlineRealtimeClient, OnlineRealtimeSubscription } from "../realtime/types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Color,
@@ -53,6 +55,7 @@ export function useOnlineGame(
   gameId: string | undefined,
   onCreated: (id: string) => void,
   identity: PlayerIdentity = browserPlayerIdentity,
+  realtime: OnlineRealtimeClient | null = null,
 ) {
   const service = useMemo(
     () => (repository ? new OnlinePlayerService(repository, identity) : null),
@@ -65,42 +68,85 @@ export function useOnlineGame(
   const busy = useRef(false);
   const generation = useRef(0);
   const operation = useRef<AbortController | null>(null);
-  const [refresh, setRefresh] = useState(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-      operation.current?.abort();
-    },
-    [],
-  );
+  const sync = useRef<OnlineGameSync | null>(null);
+  const lastSession = useRef<OnlinePlayerSession | null>(null);
+  const mutationNotice = useRef("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [connection, setConnection] = useState<OnlineConnectionStatus>("connecting");
+
   useEffect(() => {
     const id = ++generation.current;
-    operation.current?.abort();
-    busy.current = false;
-    setAction(null);
-    setPendingPromotion(null);
-    const controller = new AbortController();
-    if (!service)
-      setState({ ...empty, phase: "error", error: onlineConfigurationMessage });
-    else if (!gameId) setState(empty);
-    else {
-      setState((previous) => ({ ...previous, phase: "loading", error: "" }));
-      service
-        .loadGame(gameId, controller.signal)
-        .then((session) => {
-          if (!controller.signal.aborted && generation.current === id)
-            setState(loaded(session));
-        })
-        .catch((error) => {
-          if (!controller.signal.aborted && generation.current === id)
-            setState({ ...empty, phase: "error", error: message(error) });
-        });
+    operation.current?.abort(); busy.current = false;
+    setAction(null); setPendingPromotion(null); lastSession.current = null;
+    mutationNotice.current = ""; setSyncError(""); setSyncing(false);
+    const current = () => generation.current === id;
+    if (!service || !gameId) {
+      sync.current = null;
+      setState(!service ? { ...empty, phase: "error", error: onlineConfigurationMessage } : empty);
+      setConnection("offline");
+      return () => { generation.current++; operation.current?.abort(); };
     }
-    return () => {
-      controller.abort();
-      generation.current++;
+    setState({ ...empty, phase: "loading" });
+    setConnection(realtime ? "connecting" : "offline");
+    const coordinator = new OnlineGameSync(signal => service.loadGame(gameId, signal), {
+      onSession(session) {
+        if (!current()) return;
+        const previous = lastSession.current;
+        lastSession.current = session;
+        setSyncError("");
+        if (previous && previous.game.version === session.game.version && previous.playerColor === session.playerColor && previous.identity === session.identity && previous.identityNotice === session.identityNotice) {
+          setState(state => ({ ...state, phase: "ready", error: mutationNotice.current }));
+        } else {
+          setPendingPromotion(null);
+          setState(loaded(session, mutationNotice.current));
+        }
+      },
+      onLoading(loading) {
+        if (!current()) return;
+        setSyncing(loading);
+        if (loading && !lastSession.current) setState(previous => ({ ...previous, phase: "loading", error: "" }));
+      },
+      onError(error) {
+        if (!current()) return;
+        if (!lastSession.current) setState({ ...empty, phase: "error", error: message(error) });
+        else setSyncError("Не удалось обновить позицию. Можно повторить вручную.");
+      },
+    });
+    sync.current = coordinator;
+    let subscription: OnlineRealtimeSubscription | null = null;
+    try {
+      subscription = realtime?.subscribe(gameId, {
+        onVersion(signal) { if (current() && signal.gameId.toLowerCase() === gameId.toLowerCase()) coordinator.hint(signal.version); },
+        onStatus(status) {
+          if (!current()) return;
+          setConnection(status);
+          // Every SUBSCRIBED, including the first, closes the load/subscribe gap.
+          if (status === "online") coordinator.request();
+        },
+      }) ?? null;
+    } catch { setConnection("offline"); }
+    coordinator.request();
+    const onOnline = () => { if (current()) { subscription?.reconnect(); coordinator.request(); } };
+    const onOffline = () => { if (current()) setConnection("offline"); };
+    const onVisible = () => {
+      if (current() && document.visibilityState === "visible") {
+        if (navigator.onLine) subscription?.reconnect();
+        coordinator.request();
+      }
     };
-  }, [service, gameId, refresh]);
+    window.addEventListener("online", onOnline); window.addEventListener("offline", onOffline);
+    document.addEventListener("visibilitychange", onVisible);
+    // Reconcile missed best-effort signals, even if a socket appeared healthy.
+    const safety = setInterval(() => { if (document.visibilityState === "visible" && navigator.onLine) coordinator.request(); }, 30000);
+    return () => {
+      generation.current++; operation.current?.abort(); coordinator.dispose();
+      subscription?.unsubscribe(); clearInterval(safety);
+      window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline);
+      document.removeEventListener("visibilitychange", onVisible);
+      if (sync.current === coordinator) sync.current = null;
+    };
+  }, [service, gameId, realtime]);
 
   async function perform(
     kind: "create" | "join" | "move",
@@ -111,11 +157,14 @@ export function useOnlineGame(
   ) {
     if (!service || busy.current) return;
     busy.current = true;
-    const id = ++generation.current;
+    const id = generation.current;
+    const coordinator = sync.current;
+    coordinator?.pause();
     const controller = new AbortController();
     operation.current = controller;
     const current = () =>
       generation.current === id && !controller.signal.aborted;
+    mutationNotice.current = "";
     setAction(kind);
     setState((previous) => ({ ...previous, error: "" }));
     try {
@@ -123,31 +172,25 @@ export function useOnlineGame(
       if (current()) {
         setPendingPromotion(null);
         if (kind === "create") onCreated(session.game.id);
-        else setState(loaded(session));
+        else coordinator?.confirm(session);
       }
     } catch (error) {
       if (!current()) return;
       const text = message(error);
-      // A failed response may hide an already committed move. Reload once; never
-      // automatically retry a mutation. Conflicts also require a fresh snapshot.
-      if (kind === "move" && gameId) {
+      mutationNotice.current = text;
+      setState(previous => ({ ...previous, error: text }));
+      if (kind === "move") {
         setPendingPromotion(null);
-        try {
-          const session = await service.loadGame(gameId, controller.signal);
-          if (current()) setState(loaded(session, text));
-        } catch {
-          if (current())
-            setState((previous) => ({
-              ...previous,
-              phase: "error",
-              error: `${text} Не удалось обновить состояние. Нажмите «Обновить позицию».`,
-            }));
-        }
-      } else setState((previous) => ({ ...previous, error: text }));
+        // Re-read once: the mutation may have committed despite a lost response.
+        // Never replay a mutation from a Broadcast or a reconnect.
+        coordinator?.request(true);
+      }
+
     } finally {
       if (current()) {
         busy.current = false;
         setAction(null);
+        coordinator?.resume();
       }
     }
   }
@@ -211,6 +254,7 @@ export function useOnlineGame(
     ...state,
     game,
     action,
+    syncing, syncError, connection: syncError ? "offline" as const : connection,
     canMove,
     pendingPromotion,
     promote,
@@ -226,7 +270,7 @@ export function useOnlineGame(
         ? perform("join", (service, signal) => service.joinGame(gameId, signal))
         : Promise.resolve(),
     reload: () => {
-      if (!busy.current) setRefresh((value) => value + 1);
+      if (!busy.current) { mutationNotice.current = ""; setState(previous => ({ ...previous, error: "" })); sync.current?.request(true); }
     },
   };
 }
