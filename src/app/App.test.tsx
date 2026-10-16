@@ -40,6 +40,10 @@ describe("Application foundation", () => {
       expect(
         screen.getByRole("group", { name: "Шахматная доска" }),
       ).toBeVisible();
+    } else if (path === "#/online") {
+      expect(
+        screen.getByRole("button", { name: "Создать партию" }),
+      ).toBeVisible();
     } else {
       expect(screen.getByText(/Этот раздел пока в разработке/)).toBeVisible();
     }

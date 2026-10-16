@@ -102,7 +102,7 @@ export function HomePage() {
               </div>
               <div className="card-bottom">
                 <span>
-                  {mode.path === "computer" ? "Попробовать" : "Скоро"}
+                  {mode.path !== "learning" ? "Попробовать" : "Скоро"}
                 </span>
                 <span className="card-arrow" aria-hidden="true">
                   <ArrowIcon />

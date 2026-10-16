@@ -7,6 +7,10 @@ import { LearningPage } from "../features/learning/LearningPage";
 import { ChessMark } from "../shared/ui/ChessMark";
 
 function CurrentPage({ hash }: { hash: string }) {
+  if (hash.startsWith("#/online/")) {
+    const gameId = hash.slice("#/online/".length);
+    return <OnlinePage key={gameId} gameId={gameId} />;
+  }
   switch (hash) {
     case "#/computer":
       return <ComputerPage />;
@@ -29,7 +33,7 @@ export function App() {
 
   // Announce each page change to keyboard and assistive-technology users.
   useEffect(() => {
-    document.title = `${hash === "#/computer" ? "Играть с компьютером" : hash === "#/online" ? "Играть онлайн" : hash === "#/learning" ? "Обучение" : "Ваш первый ход"} — Online Chess`;
+    document.title = `${hash === "#/computer" ? "Играть с компьютером" : hash.startsWith("#/online") ? "Играть онлайн" : hash === "#/learning" ? "Обучение" : "Ваш первый ход"} — Online Chess`;
     if (hash.startsWith("#/")) {
       document.querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
       window.scrollTo?.(0, 0);

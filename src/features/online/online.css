@@ -1,0 +1,307 @@
+.online-page {
+  padding: 28px 0 50px;
+  min-height: 72vh;
+}
+.online-heading {
+  margin: 32px 0;
+}
+.online-heading h1 {
+  font-size: 38px;
+  letter-spacing: -1.4px;
+  margin: 14px 0;
+}
+.online-heading > p {
+  font-size: 14px;
+  color: #6c756b;
+  line-height: 1.8;
+}
+.online-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(230px, 0.8fr);
+  gap: 50px;
+  background: #edf0e6;
+  border: 1px solid #dce2d5;
+  padding: 32px;
+  border-radius: 12px;
+  max-width: 980px;
+}
+.online-create h2 {
+  font-size: 26px;
+  margin: 16px 0;
+}
+.online-create p {
+  font-size: 13px;
+  line-height: 1.9;
+  color: #657362;
+  max-width: 450px;
+}
+.online-create label,
+.invitation-panel label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.online-create select {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #294c3d;
+  border: 1px solid #c9d3c1;
+  border-radius: 6px;
+  background: #fdfcf8;
+  margin-bottom: 18px;
+}
+.online-primary,
+.invitation-controls button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #294c3d;
+  border: 0;
+  border-radius: 6px;
+  padding: 14px 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.online-primary {
+  width: 100%;
+}
+.online-primary:hover,
+.invitation-controls button:hover {
+  background: #3c654f;
+}
+.online-primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.online-loading {
+  font-size: 14px;
+  padding: 20px 0;
+  color: #627657;
+}
+.online-error {
+  border: 1px solid #e8c2b9;
+  background: #fff4ef;
+  color: #923e31;
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  margin: 22px 0;
+}
+.online-error p {
+  margin: 0 0 10px;
+}
+.online-error a {
+  text-decoration: underline;
+  display: inline-block;
+  margin-right: 18px;
+}
+.online-text-button {
+  border: 0;
+  padding: 8px 0;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  background: none;
+  color: #294c3d;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.invitation-panel {
+  max-width: 1040px;
+  background: #fdfcf8;
+  border: 1px solid #dce2d5;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 28px;
+}
+.invitation-panel h2 {
+  font-size: 21px;
+  margin: 0 0 16px;
+  letter-spacing: -0.5px;
+}
+.online-id {
+  font-size: 11px;
+  color: #6c756b;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.online-id code {
+  font: inherit;
+}
+.invitation-controls {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.invitation-controls input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 12px;
+  color: #294c3d;
+  background: #f7f8f2;
+  border: 1px solid #cdd6c5;
+  border-radius: 6px;
+}
+.copy-status {
+  font-size: 11px;
+  color: #587044;
+  line-height: 1.6;
+  margin: 8px 0;
+  min-height: 1em;
+}
+.link-note {
+  font-size: 11px;
+  color: #788371;
+  line-height: 1.7;
+  margin-bottom: 0;
+}
+.online-game-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(245px, 1fr);
+  gap: 38px;
+  max-width: 1040px;
+}
+.online-board {
+  min-width: 0;
+}
+.online-readonly {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #788371;
+  padding-left: 22px;
+}
+.online-sidebar {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+.online-panel {
+  border: 1px solid #dce2d5;
+  background: #fdfcf8;
+  border-radius: 12px;
+  padding: 23px;
+}
+.online-panel > p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.online-panel .online-game-status {
+  font-size: 23px;
+  letter-spacing: -0.5px;
+  margin: 16px 0;
+}
+.online-panel h2 {
+  font-size: 18px;
+  letter-spacing: -0.4px;
+  margin: 0 0 18px;
+}
+.online-panel .online-small {
+  font-size: 11px;
+  color: #788371;
+}
+.online-history {
+  max-height: 320px;
+  overflow: auto;
+}
+.online-history table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.online-history th,
+.online-history td {
+  padding: 9px 6px;
+}
+.online-history thead {
+  font-size: 10px;
+  color: #788371;
+  background: #edf0e6;
+  position: sticky;
+  top: 0;
+}
+.online-history tbody th {
+  font-weight: 400;
+  color: #788371;
+}
+.online-history tbody tr:nth-child(even) {
+  background: #f4f5ef;
+}
+.online-back {
+  font-size: 12px;
+  text-decoration: underline;
+}
+.online-page button:focus-visible,
+.online-page input:focus-visible,
+.online-page select:focus-visible {
+  outline: 3px solid #7058a5;
+  outline-offset: 3px;
+}
+@media (max-width: 850px) {
+  .online-create {
+    gap: 25px;
+    padding: 25px;
+  }
+  .online-game-layout {
+    gap: 22px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(210px, 1fr);
+  }
+  .online-panel {
+    padding: 18px;
+  }
+}
+@media (max-width: 650px) {
+  .online-heading h1 {
+    font-size: 32px;
+  }
+  .online-create,
+  .online-game-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .online-create {
+    padding: 22px;
+  }
+  .online-create h2 {
+    font-size: 24px;
+  }
+  .invitation-panel {
+    padding: 20px;
+  }
+  .invitation-controls {
+    flex-direction: column;
+  }
+  .invitation-controls button {
+    align-self: flex-start;
+  }
+  .online-id {
+    font-size: 10px;
+  }
+  .online-panel {
+    padding: 20px;
+  }
+  .online-heading {
+    margin: 26px 0;
+  }
+  .online-heading > p {
+    font-size: 13px;
+  }
+  .online-error {
+    padding: 15px;
+  }
+  .online-page {
+    padding-top: 23px;
+  }
+}

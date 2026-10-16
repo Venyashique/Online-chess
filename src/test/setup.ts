@@ -4,4 +4,5 @@ import { afterEach, vi } from "vitest";
 
 afterEach(cleanup);
 // jsdom does not implement scrolling; navigation itself is tested in App.test.tsx.
-Object.defineProperty(window, "scrollTo", { value: vi.fn(), writable: true });
+if (typeof window !== "undefined")
+  Object.defineProperty(window, "scrollTo", { value: vi.fn(), writable: true });
