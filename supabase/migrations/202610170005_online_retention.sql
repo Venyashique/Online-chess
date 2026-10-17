@@ -5,19 +5,20 @@ update public.online_games set expires_at=statement_timestamp()+make_interval(se
 alter table public.online_games alter column expires_at set not null;
 create index online_games_expiry_idx on public.online_games(expires_at);
 create or replace function online_security.expired(p_id uuid)
-returns boolean language sql stable set search_path='' as $$
-  select coalesce((select expires_at<=statement_timestamp() from public.online_games where id=p_id),false);
+returns boolean language sql volatile set search_path='' as $$
+  -- statement_timestamp() predates row-lock waits and can revive expired games.
+  select coalesce((select expires_at<=clock_timestamp() from public.online_games where id=p_id),false);
 $$;
 create function online_security.apply_retention()
 returns trigger language plpgsql security definer set search_path='' as $$
-declare seconds integer;
+declare seconds integer; now_at timestamptz:=clock_timestamp();
 begin
   if tg_op='UPDATE' then
     if new.version<=old.version then return new; end if;
-    if old.expires_at<=statement_timestamp() then raise exception 'Game expired' using errcode='P0001'; end if;
+    if old.expires_at<=now_at then raise exception 'Game expired' using errcode='P0001'; end if;
   end if;
   select case when new.opponent_joined_at is null then waiting_seconds else joined_seconds end into strict seconds from online_security.policy where singleton;
-  new.expires_at:=statement_timestamp()+make_interval(secs=>seconds);
+  new.expires_at:=now_at+make_interval(secs=>seconds);
   return new;
 end;
 $$;

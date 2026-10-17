@@ -24,9 +24,15 @@ place. Per-game counter/burst rows have a game FK for eventual cascading cleanup
 Move burst uses atomic row locking and elapsed database time; fixed minute limits
 also apply. Separate operation budgets preserve reads/moves during creation spam.
 Invalid tokens do not consume a real player's read/move bucket.
+Window admission samples wall-clock time after acquiring its row lock and never
+rewinds an existing window. Creation checks are VOLATILE and use the current
+clock/snapshot, including when their outer SQL statement started earlier.
 Recognized idempotent join/create responses share the seat's read quota, so they
 cannot become alternative unlimited read endpoints. Denied burst requests retain
 fractional refill credit instead of postponing recovery.
+The join wrapper uses NO KEY UPDATE, compatible with quota-row FK KEY SHARE
+checks. Recognized joins return directly without upgrading to the legacy join's
+stronger row lock; this prevents a first-read/idempotent-join lock cycle.
 
 ## Server policy
 
@@ -88,6 +94,9 @@ grace starting at migration time. New waiting games expire after waiting_seconds
 first join and each confirmed version-increasing move set joined_seconds.
 Reads, reconnect and idempotent joins do not extend expiration. Expired games
 cannot resume via the new API. Tokens and IDs are not rewritten.
+Expiry checks and trigger renewal use clock_timestamp(), not the timestamp at
+the start of a statement which may have waited on a row lock. A join/move queued
+before expiry but executed after expiry is rejected and cannot revive the game.
 
 `online_cleanup_preview(p_limit)` is service/owner-only, returns count and a
 bounded sample (1..1000) without tokens/hashes. It has NO DELETE path or enable
@@ -127,14 +136,60 @@ failure are preferable to silently reopening the bypass.
 ## Verification and remaining limits
 
 `npm run typecheck` checks client/shared handlers AND both Deno entrypoints using
-`tsconfig.edge.json` and a minimal local declaration of the used Deno API. Native
-Deno/deployed gateway verification remains an external deployment check.
+`tsconfig.edge.json` and a minimal local declaration of the used Deno API.
 `npm test` uses real SQL migrations/roles in isolated PGlite, real handlers,
 controlled Siteverify responses, SDK HTTP boundary and React UI. No real provider
 or production data are used by these tests. `npm run build` includes typechecks.
 PGlite serializes its transactions on one local connection; parallel-handler
 tests are useful regressions but do not replace multi-connection PostgreSQL lock/
-contention checks in staging before cutover.
+contention checks.
+
+## Native runtime and concurrency verification
+
+Verified locally with Deno 2.9.6, PostgreSQL 17.11 and PostgREST 13.0.7, using
+the pinned Function dependencies and real independent PostgreSQL connections.
+Both original Function entrypoints run in native Deno with only the required
+environment-variable and loopback network permissions. A test bootstrap selects
+two listening ports and replaces only the external Siteverify response. A local
+HTTP router strips the /rest/v1 prefix; it forwards every RPC to real PostgREST.
+Database Broadcast is an outbox fixture, not a real Realtime/WebSocket server.
+
+Native tests reproduced and verified fixes for three issues that PGlite missed:
+expiry during row-lock waits, an FK/idempotent-join deadlock, and stale statement
+timestamps reopening quota windows. They also cover successful gameplay,
+concurrent creates/capacity/idempotency, competing joins and moves, read isolation,
+burst/minute admission, SQL rollback, limiter failure, dry-run cleanup and mixed
+operations. Faults and timing barriers are applied only to the disposable fixture.
+
+The repeatable runner is `scripts/check-online-native.mjs`. It intentionally is
+not part of ordinary `npm test` and does not add a project dependency. Supply a
+private config JSON in a separate fixture directory containing pg@8.16.3:
+
+```sh
+node scripts/check-online-native.mjs /path/to/disposable-fixture/config.json
+```
+
+The fixture contract is: `isolated: true`, a database named `chess_native` at a
+local Docker bridge address, `pg` connection settings, `defaults` captured from
+the fresh policy row, the local routing `url`, loopback `apiPort`/`movePort`, a
+local-only `anonKey` and a unique `fixtureId`. The same UUID must be the sole row
+of `online_security.native_test_fixture(fixture_id uuid)` and be returned by
+the router's `/health` response. These markers are verified before any reset.
+Never add them to a real database to bypass the guard. The runner truncates test
+games, modifies test policy/ACL and installs temporary fault/timing instrumentation.
+It writes only noncredential results beside the private config.
+
+Provision the fixture with the exact six migrations, roles anon/authenticated/
+service_role plus a NOINHERIT PostgREST authenticator, and a test realtime.send
+outbox. Keep PostgreSQL/PostgREST on an internal Docker network, with no production
+credentials or data; expose test HTTP listeners only on loopback. Destroy the
+fixture after testing. Neither a database password nor a Supabase admin account
+is needed from the user for this local verification.
+
+Native Deno and PostgreSQL verification is now complete. Actual hosted Supabase
+Edge gateway behavior, real production Turnstile proofs and Realtime delivery
+remain rollout smoke checks; do not treat the local provider/outbox fixtures as
+proof of those external services.
 
 No per-IP rate identity or user accounts are introduced. Distributed bots can
 exhaust shared budgets; quotas can reduce availability; the limiter itself costs

@@ -41,21 +41,28 @@ revoke all on all tables in schema online_security from public, anon, authentica
 
 -- Fixed UTC windows; one stable row per key, never per period/request/token/IP.
 create function online_security.check_window(p_key text,p_limit integer,p_seconds integer)
-returns integer language sql stable set search_path='' as $$
-  select coalesce((select case when b.hits >= p_limit then greatest(1,ceil(extract(epoch from (b.window_start + make_interval(secs=>p_seconds)-statement_timestamp())))::integer) else 0 end
-    from online_security.buckets b where b.key=p_key
-      and b.window_start=to_timestamp(floor(extract(epoch from statement_timestamp())/p_seconds)*p_seconds)),0);
+returns integer language sql volatile set search_path='' as $$
+  with clock_value as materialized (select clock_timestamp() as at)
+  select coalesce((select case when b.hits >= p_limit then greatest(1,ceil(extract(epoch from (b.window_start + make_interval(secs=>p_seconds)-t.at)))::integer) else 0 end
+    from online_security.buckets b cross join clock_value t where b.key=p_key
+      and b.window_start=to_timestamp(floor(extract(epoch from t.at)/p_seconds)*p_seconds)),0);
 $$;
 create function online_security.take_window(p_key text,p_limit integer,p_seconds integer,p_game uuid default null)
 returns integer language plpgsql set search_path='' as $$
-declare start_at timestamptz; n integer;
+declare start_at timestamptz; previous_start timestamptz; now_at timestamptz; n integer;
 begin
-  start_at:=to_timestamp(floor(extract(epoch from statement_timestamp())/p_seconds)*p_seconds);
-  insert into online_security.buckets(key,game_id,window_start,hits) values(p_key,p_game,start_at,1)
-  on conflict(key) do update set window_start=excluded.window_start,
-    hits=case when online_security.buckets.window_start=excluded.window_start then least(online_security.buckets.hits+1,p_limit+1) else 1 end
+  insert into online_security.buckets(key,game_id,window_start,hits)
+    values(p_key,p_game,to_timestamp(floor(extract(epoch from clock_timestamp())/p_seconds)*p_seconds),0)
+    on conflict(key) do nothing;
+  select window_start into previous_start from online_security.buckets where key=p_key for update;
+  -- Charge at execution time AFTER waiting. Never rewind a newer bucket window.
+  now_at:=clock_timestamp();
+  start_at:=greatest(previous_start,to_timestamp(floor(extract(epoch from now_at)/p_seconds)*p_seconds));
+  update online_security.buckets set window_start=start_at,
+    hits=case when window_start=start_at then least(hits+1,p_limit+1) else 1 end
+  where key=p_key
   returning hits into n;
-  if n>p_limit then return greatest(1,ceil(extract(epoch from (start_at+make_interval(secs=>p_seconds)-statement_timestamp())))::integer); end if;
+  if n>p_limit then return greatest(1,ceil(extract(epoch from (start_at+make_interval(secs=>p_seconds)-now_at)))::integer); end if;
   return 0;
 end;
 $$;
@@ -151,7 +158,9 @@ create function public.online_api_join(p_id uuid,p_token text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare g public.online_games; seat text; cap integer; wait_for integer;
 begin
-  select * into g from public.online_games where id=p_id for update;
+  -- FK checks on a first quota row take KEY SHARE on the game. NO KEY UPDATE
+  -- serializes joins without blocking those checks and creating a lock cycle.
+  select * into g from public.online_games where id=p_id for no key update;
   if online_security.expired(p_id) then return jsonb_build_object('code','GAME_EXPIRED'); end if;
   -- Cover concurrent joins using the same token; an idempotent join is a read.
   seat:=public.online_seat_color(g,p_token);
@@ -159,6 +168,8 @@ begin
     select player_reads_minute into strict cap from online_security.policy where singleton;
     wait_for:=online_security.take_window('player:'||g.id||':'||seat,cap,60,g.id);
     if wait_for>0 then return jsonb_build_object('code','RATE_LIMITED','retry_after',wait_for); end if;
+    -- Already recognized: no need to upgrade to the legacy join's UPDATE lock.
+    return jsonb_build_object('code','OK','session',public.online_game_session(g,p_token));
   end if;
   return public.join_online_game(p_id,p_token);
 end;
