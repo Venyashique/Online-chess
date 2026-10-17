@@ -10,7 +10,7 @@ import { browserPlayerIdentity } from "../identity/PlayerIdentityStore";
 import type { PlayerIdentity } from "../identity/PlayerIdentityStore";
 import { OnlinePlayerService } from "./OnlinePlayerService";
 import type { OnlinePlayerSession } from "./OnlinePlayerService";
-import { OnlineActionError } from "./errors";
+import { OnlineActionError, retryDelay } from "./errors";
 import type {
   CreatorColorChoice,
   OnlineGame,
@@ -65,6 +65,13 @@ export function useOnlineGame(
   const [action, setAction] = useState<"create" | "join" | "move" | null>(null);
   const [pendingPromotion, setPendingPromotion] =
     useState<PendingPromotion | null>(null);
+  const [retryUntil, setRetryUntil] = useState(0);
+  const cooldown = retryUntil > Date.now();
+  useEffect(() => {
+    if (!retryUntil) return;
+    const timer = setTimeout(() => setRetryUntil(0), Math.max(0, retryUntil - Date.now()));
+    return () => clearTimeout(timer);
+  }, [retryUntil]);
   const busy = useRef(false);
   const generation = useRef(0);
   const operation = useRef<AbortController | null>(null);
@@ -79,7 +86,7 @@ export function useOnlineGame(
     const id = ++generation.current;
     operation.current?.abort(); busy.current = false;
     setAction(null); setPendingPromotion(null); lastSession.current = null;
-    mutationNotice.current = ""; setSyncError(""); setSyncing(false);
+    setRetryUntil(0); mutationNotice.current = ""; setSyncError(""); setSyncing(false);
     const current = () => generation.current === id;
     if (!service || !gameId) {
       sync.current = null;
@@ -110,7 +117,7 @@ export function useOnlineGame(
       onError(error) {
         if (!current()) return;
         if (!lastSession.current) setState({ ...empty, phase: "error", error: message(error) });
-        else setSyncError("Не удалось обновить позицию. Можно повторить вручную.");
+        else setSyncError(retryDelay(error) ? message(error) : "Не удалось обновить позицию. Можно повторить вручную.");
       },
     });
     sync.current = coordinator;
@@ -155,7 +162,7 @@ export function useOnlineGame(
       signal: AbortSignal,
     ) => Promise<OnlinePlayerSession>,
   ) {
-    if (!service || busy.current) return;
+    if (!service || busy.current || retryUntil > Date.now()) return;
     busy.current = true;
     const id = generation.current;
     const coordinator = sync.current;
@@ -176,6 +183,8 @@ export function useOnlineGame(
       }
     } catch (error) {
       if (!current()) return;
+      const seconds = retryDelay(error);
+      if (seconds) { setRetryUntil(Date.now() + seconds * 1000); coordinator?.deferRetry(seconds); }
       const text = message(error);
       mutationNotice.current = text;
       setState(previous => ({ ...previous, error: text }));
@@ -198,6 +207,7 @@ export function useOnlineGame(
     state.game?.id.toLowerCase() === gameId?.toLowerCase() ? state.game : null;
   const canMove =
     !!game &&
+    !cooldown &&
     !!state.playerColor &&
     !!game.seats?.opponentJoinedAt &&
     !game.seats.legacy &&
@@ -254,16 +264,16 @@ export function useOnlineGame(
     ...state,
     game,
     action,
-    syncing, syncError, connection: syncError ? "offline" as const : connection,
+    syncing, syncError, cooldown, connection: syncError ? "offline" as const : connection,
     canMove,
     pendingPromotion,
     promote,
     cancelPromotion: () => setPendingPromotion(null),
     requestMove,
     creating: action === "create",
-    createGame: (choice: CreatorColorChoice) =>
+    createGame: (choice: CreatorColorChoice, turnstileToken?: string) =>
       perform("create", (service, signal) =>
-        service.createGame(choice, signal),
+        service.createGame(choice, signal, turnstileToken),
       ),
     joinGame: () =>
       gameId

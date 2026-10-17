@@ -123,3 +123,9 @@ SQL 4C: `supabase/migrations/202610160003_online_version_broadcast.sql`. Мех�
 Проверки 4C: TypeScript, 143 теста, production build; Chromium 1440/390/320 с локальной имитацией HTTP/WebSocket и PostgreSQL, включая автоматические ходы двух игроков, reconnect и зрителя без credentials. Реальный Realtime Supabase в этой задаче не проверялся.
 
 Live-presence, аккаунты, рейтинг, часы, обучение и 3D не добавлены. Для публичного запуска ещё нужны лимиты API/Realtime и политика утраты/отзыва ключей.
+
+## Security Fix 1 — подготовлено локально
+
+Создание/join/чтение переведены на Edge API, ходы используют общий атомарный limiter PostgreSQL. Требуются migrations 004/005, обновление обеих Edge Functions, Turnstile и новый клиент; **006 выполняется только последним cutover**. До 006 прежние RPC остаются доступны. Настройки и порядок deployment: [docs/security-fix-1.md](docs/security-fix-1.md). Ничего из этого автоматически в реальный проект не применяется.
+
+Для новой сборки нужен публичный `VITE_TURNSTILE_SITE_KEY`; без него создание закрыто, существующие партии доступны. `TURNSTILE_SECRET_KEY` и `TURNSTILE_ALLOWED_HOSTNAMES` настраиваются только на сервере Supabase. Cleanup реализован исключительно как dry-run: никаких удалений и Cron jobs.

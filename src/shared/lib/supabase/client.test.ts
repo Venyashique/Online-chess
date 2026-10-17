@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBrowserSupabaseClient } from "./client";
 
@@ -16,7 +17,7 @@ describe("Supabase URL configuration", () => {
         VITE_SUPABASE_ANON_KEY: "test-public-anon-key",
       });
       expect(client).not.toBeNull();
-      await client!.rpc("get_online_game", {
+      await (client as SupabaseClient).rpc("get_online_game", {
         p_id: "00000000-0000-4000-8000-000000000000",
       });
       await client!.functions.invoke("submit-online-move", { body: {} });

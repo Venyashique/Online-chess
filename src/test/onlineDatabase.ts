@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { createSubmitMoveHandler } from "../../supabase/functions/submit-online-move/handler.ts";
 
-export async function createOnlineTestDatabase() {
+export async function createOnlineTestDatabase({ limits = true }: { limits?: boolean } = {}) {
   const db = new PGlite();
   await db.exec(
     "create role anon; create role authenticated; create role service_role;",
@@ -28,7 +28,14 @@ export async function createOnlineTestDatabase() {
       "utf8",
     ),
   );
+  if (limits) for (const name of ['202610170004_online_api_limits.sql', '202610170005_online_retention.sql']) {
+    await db.exec(readFileSync(new URL('../../supabase/migrations/' + name, import.meta.url), 'utf8'));
+  }
   const specs: Record<string, { sql: string; keys: string[] }> = {
+    online_api_admit: { sql: 'select public.online_api_admit($1,$2,$3) as result', keys: ['p_operation','p_id','p_token'] },
+    online_api_create: { sql: 'select public.online_api_create($1,$2,$3) as result', keys: ['p_id','p_color_choice','p_token'] },
+    online_api_join: { sql: 'select public.online_api_join($1,$2) as result', keys: ['p_id','p_token'] },
+    online_api_commit_move: { sql: 'select public.online_api_commit_move($1,$2,$3,$4,$5,$6) as result', keys: ['p_id','p_token','p_expected_version','p_from','p_to','p_promotion'] },
     create_online_game: {
       sql: "select public.create_online_game($1) as result",
       keys: ["p_color_choice"],
@@ -78,15 +85,10 @@ export async function createOnlineTestDatabase() {
     });
   }
   const handler = createSubmitMoveHandler({
-    getSession: (id, token) =>
-      rpc(
-        "get_online_game_session",
-        { p_id: id, p_token: token },
-        "service_role",
-      ),
+    admit: (operation, id, token) => rpc('online_api_admit', { p_operation: operation, p_id: id, p_token: token }, 'service_role'),
     commitMove: (command) =>
       rpc(
-        "commit_online_move",
+        "online_api_commit_move",
         {
           p_id: command.gameId,
           p_token: command.token,

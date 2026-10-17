@@ -1,3 +1,4 @@
+import { retryDelay } from '../model/errors';
 import type { OnlinePlayerSession } from '../model/OnlinePlayerService';
 
 export type SyncCallbacks = {
@@ -9,6 +10,7 @@ export type SyncCallbacks = {
  * mutation responses, never from untrusted Broadcast hints. */
 export class OnlineGameSync {
   private confirmed = 0;
+  private retryNotBefore = 0;
   private paused = false;
   private disposed = false;
   private force = false;
@@ -35,6 +37,11 @@ export class OnlineGameSync {
     if (immediate && this.timer) { clearTimeout(this.timer); this.timer = null; }
     this.drain();
   }
+  deferRetry(seconds: number) {
+    if (this.disposed) return;
+    this.retryNotBefore = Math.max(this.retryNotBefore, Date.now() + Math.min(86400, Math.max(1, seconds)) * 1000);
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+  }
   confirm(session: OnlinePlayerSession): boolean {
     if (this.disposed || session.game.version < this.confirmed) return false;
     this.confirmed = session.game.version;
@@ -55,7 +62,7 @@ export class OnlineGameSync {
   }
   private drain() {
     if (this.disposed || this.paused || this.active || (!this.force && !this.pendingHints.size) || this.timer) return;
-    const delay = this.urgent ? 0 : Math.max(0, this.lastStarted + this.minIntervalMs - Date.now());
+    const delay = Math.max(0, this.retryNotBefore - Date.now(), this.urgent ? 0 : this.lastStarted + this.minIntervalMs - Date.now());
     if (delay) { this.timer = setTimeout(() => { this.timer = null; this.drain(); }, delay); return; }
     this.force = false; this.urgent = false; this.pendingHints.clear(); this.lastStarted = Date.now();
     const controller = new AbortController(); this.active = controller;
@@ -66,7 +73,7 @@ export class OnlineGameSync {
     try { request = this.load(controller.signal); } catch (error) { request = Promise.reject(error); }
     request.then(session => {
       if (current()) this.confirm(session);
-    }).catch(error => { if (current()) this.callbacks.onError(error); }).finally(() => {
+    }).catch(error => { if (current()) { const seconds = retryDelay(error); if (seconds) { this.deferRetry(seconds); this.force = true; } this.callbacks.onError(error); } }).finally(() => {
       if (!current()) return;
       this.active = null; this.callbacks.onLoading(false); this.drain();
     });

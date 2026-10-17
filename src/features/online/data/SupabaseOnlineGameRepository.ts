@@ -83,142 +83,47 @@ export function parseOnlineGameRecord(value: unknown): OnlineGameRecord {
   };
 }
 
-function rpcError(code: string | undefined): Error {
-  if (code === "PGRST202" || code === "42P01")
-    return new Error(
-      "Онлайн-хранилище не подготовлено. Примените SQL migration из supabase/migrations.",
-    );
-  if (code === "42501")
-    return new Error(
-      "Нет доступа к онлайн-хранилищу. Проверьте права RPC в migration.",
-    );
-  return new Error(
-    "Не удалось связаться с онлайн-хранилищем. Проверьте подключение и повторите попытку.",
-  );
-}
-
 export class SupabaseOnlineGameRepository
   implements OnlineGameRepository, OnlinePlayerRepository
 {
   constructor(private readonly client: SupabaseClient<Database>) {}
 
-  async createGame(
-    choice: CreatorColorChoice,
-    signal?: AbortSignal,
-  ): Promise<OnlineGameRecord> {
-    const request = this.client.rpc("create_online_game", {
-      p_color_choice: choice,
-    });
-    const { data, error } = await (signal
-      ? request.abortSignal(signal)
-      : request);
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) throw rpcError(error.code);
-    return parseOnlineGameRecord(data);
+  async createGame(_choice: CreatorColorChoice, _signal?: AbortSignal): Promise<OnlineGameRecord> {
+    throw new Error("Создание без места игрока отключено. Создайте партию в онлайн-разделе.");
   }
-
-  async getGame(
-    id: string,
-    signal?: AbortSignal,
-  ): Promise<OnlineGameRecord | null> {
-    if (!isGameId(id)) return null;
-    const request = this.client.rpc("get_online_game", { p_id: id });
-    const { data, error } = await (signal
-      ? request.abortSignal(signal)
-      : request);
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) throw rpcError(error.code);
-    return data === null ? null : parseOnlineGameRecord(data);
+  async getGame(id: string, signal?: AbortSignal): Promise<OnlineGameRecord | null> {
+    return (await this.loadSession(id, null, signal))?.game ?? null;
   }
-  async createWithSeat(
-    id: string,
-    choice: CreatorColorChoice,
-    token: string,
-    signal?: AbortSignal,
-  ) {
-    const request = this.client.rpc("create_online_game_with_seat", {
-      p_id: id,
-      p_color_choice: choice,
-      p_token: token,
-    });
-    const { data, error } = await (signal
-      ? request.abortSignal(signal)
-      : request);
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) throw rpcError(error.code);
-    return parseActionResponse(data);
+  private async invoke(name: string, body: Record<string, unknown>, signal?: AbortSignal) {
+    const { data, error } = await this.client.functions.invoke(name, { body, signal });
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    if (error) {
+      const response = error.context instanceof Response ? error.context : null;
+      const payload = response ? await response.json().catch(() => null) : null;
+      const status = response?.status;
+      const code = status === 429 ? (payload?.code === 'CAPACITY_REACHED' ? 'CAPACITY_REACHED' : 'RATE_LIMITED') : status === 503 ? 'UNAVAILABLE' : typeof payload?.code === 'string' ? payload.code : 'UNAVAILABLE';
+      const rawRetry = Number(response?.headers.get('retry-after') || payload?.retry_after);
+      const retry = status === 429 || status === 503 || !response ? Math.min(86400, Math.max(1, Math.ceil(rawRetry || 5))) : undefined;
+      throw new OnlineActionError(code, retry);
+    }
+    return data;
+  }
+  async createWithSeat(id: string, choice: CreatorColorChoice, token: string, signal?: AbortSignal, turnstileToken?: string) {
+    return parseActionResponse(await this.invoke('online-api', { action: 'create', game_id: id, color_choice: choice, player_token: token, ...(turnstileToken ? { turnstile_token: turnstileToken } : {}) }, signal));
   }
   async loadSession(id: string, token: string | null, signal?: AbortSignal) {
     if (!isGameId(id)) return null;
-    const request = this.client.rpc("get_online_game_session", {
-      p_id: id,
-      p_token: token,
-    });
-    const { data, error } = await (signal
-      ? request.abortSignal(signal)
-      : request);
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) throw rpcError(error.code);
-    return data === null ? null : parsePlayerSession(data);
+    try {
+      return parseActionResponse(await this.invoke('online-api', { action: 'read', game_id: id, player_token: token }, signal));
+    } catch (error) {
+      if (error instanceof OnlineActionError && error.code === 'NOT_FOUND') return null;
+      throw error;
+    }
   }
   async joinGame(id: string, token: string, signal?: AbortSignal) {
-    const request = this.client.rpc("join_online_game", {
-      p_id: id,
-      p_token: token,
-    });
-    const { data, error } = await (signal
-      ? request.abortSignal(signal)
-      : request);
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) throw rpcError(error.code);
-    return parseActionResponse(data);
+    return parseActionResponse(await this.invoke('online-api', { action: 'join', game_id: id, player_token: token }, signal));
   }
-  async submitMove(
-    id: string,
-    token: string,
-    move: MoveAction,
-    version: number,
-    signal?: AbortSignal,
-  ) {
-    const { data, error } = await this.client.functions.invoke(
-      "submit-online-move",
-      {
-        body: {
-          game_id: id,
-          player_token: token,
-          expected_version: version,
-          from: move.from,
-          to: move.to,
-          ...(move.promotion ? { promotion: move.promotion } : {}),
-        },
-        signal,
-      },
-    );
-    if (signal?.aborted)
-      throw new DOMException("Операция отменена", "AbortError");
-    if (error) {
-      if (error.context instanceof Response) {
-        let body: unknown;
-        try {
-          body = await error.context.json();
-        } catch {
-          throw new OnlineActionError("UNAVAILABLE");
-        }
-        if (
-          body &&
-          typeof body === "object" &&
-          "code" in body &&
-          typeof body.code === "string"
-        )
-          throw new OnlineActionError(body.code);
-      }
-      throw new OnlineActionError("UNAVAILABLE");
-    }
-    return parseActionResponse(data);
+  async submitMove(id: string, token: string, move: MoveAction, version: number, signal?: AbortSignal) {
+    return parseActionResponse(await this.invoke('submit-online-move', { game_id: id, player_token: token, expected_version: version, from: move.from, to: move.to, ...(move.promotion ? { promotion: move.promotion } : {}) }, signal));
   }
 }

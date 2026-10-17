@@ -12,12 +12,12 @@ import {
   SupabaseOnlineGameRepository,
 } from "./SupabaseOnlineGameRepository";
 
-function setup(body: unknown, status = 200) {
+function setup(body: unknown, status = 200, headers: Record<string, string> = {}) {
   const fetch = vi.fn(
     async () =>
       new Response(JSON.stringify(body), {
         status,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
       }),
   );
   const client = createClient<Database>(
@@ -36,45 +36,22 @@ function setup(body: unknown, status = 200) {
 }
 
 describe("Supabase repository using real SDK and mocked HTTP", () => {
-  it("creates through RPC rather than direct table access", async () => {
-    const h = setup(databaseRow());
-    const game = await h.repository.createGame("white");
-    expect(game.id).toBe(existingGameId);
-    const [url, options] = h.fetch.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
-    expect(String(url)).toContain("/rest/v1/rpc/create_online_game");
-    expect(options.method).toBe("POST");
-    expect(JSON.parse(String(options.body))).toEqual({
-      p_color_choice: "white",
-    });
-  });
-
-  it("loads by ID through RPC and handles a missing record", async () => {
-    const h = setup(databaseRow());
-    expect((await h.repository.getGame(existingGameId))?.id).toBe(
-      existingGameId,
-    );
-    const [url, options] = h.fetch.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
-    expect(String(url)).toContain("/rest/v1/rpc/get_online_game");
-    expect(JSON.parse(String(options.body))).toEqual({ p_id: existingGameId });
-    expect(await setup(null).repository.getGame(unknownGameId)).toBeNull();
-  });
-
-  it("does not send invalid IDs and surfaces migration errors", async () => {
+  it("disables legacy creation without sending a public RPC", async () => {
     const h = setup(null);
-    expect(await h.repository.getGame("bad")).toBeNull();
+    await expect(h.repository.createGame('white')).rejects.toThrow('без места');
     expect(h.fetch).not.toHaveBeenCalled();
-    await expect(
-      setup(
-        { code: "PGRST202", message: "function missing" },
-        404,
-      ).repository.createGame("white"),
-    ).rejects.toThrow("migration");
+  });
+  it("loads through the limited Edge API and handles missing games", async () => {
+    const h = setup({ code: 'OK', session: { game: databaseRow(), player_color: null, identity: 'none' } });
+    expect((await h.repository.getGame(existingGameId))?.id).toBe(existingGameId);
+    const [url, options] = h.fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/functions/v1/online-api');
+    expect(JSON.parse(String(options.body))).toEqual({ action: 'read', game_id: existingGameId, player_token: null });
+    expect(await setup({ code: 'NOT_FOUND' }, 404).repository.getGame(unknownGameId)).toBeNull();
+  });
+  it("does not send invalid IDs or expose raw backend errors", async () => {
+    const h = setup(null); expect(await h.repository.getGame('bad')).toBeNull(); expect(h.fetch).not.toHaveBeenCalled();
+    await expect(setup({ code: 'PGRST202', message: 'function missing' }, 404).repository.getGame(existingGameId)).rejects.toMatchObject({ code: 'PGRST202' });
   });
 
   it("rejects malformed records and preserves cancellation", async () => {
@@ -90,7 +67,7 @@ describe("Supabase repository using real SDK and mocked HTTP", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      setup(databaseRow()).repository.getGame(
+      setup({ code: 'OK', session: { game: databaseRow(), player_color: null, identity: 'none' } }).repository.getGame(
         existingGameId,
         controller.signal,
       ),
@@ -130,7 +107,7 @@ it("uses a token-bearing POST for the seat and the Edge Function for moves, neve
     2,
   );
   const calls = h.fetch.mock.calls as unknown as [string, RequestInit][];
-  expect(String(calls[0][0])).toContain("/rpc/create_online_game_with_seat");
+  expect(String(calls[0][0])).toContain("/functions/v1/online-api");
   expect(String(calls[1][0])).toContain("/functions/v1/submit-online-move");
   expect(String(calls[1][0])).not.toContain(token);
   expect(JSON.parse(String(calls[1][1].body))).toEqual({
@@ -155,4 +132,10 @@ it("maps an Edge version conflict to a typed domain error", async () => {
       2,
     ),
   ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+});
+
+it.each([429, 503])('propagates status %i and Retry-After with a single request and no public RPC fallback', async status => {
+  const h = setup({ code: status === 429 ? 'RATE_LIMITED' : 'UNAVAILABLE', retry_after: 2 }, status, { 'retry-after': '12' });
+  await expect(h.repository.loadSession(existingGameId, null)).rejects.toMatchObject({ retryAfterSeconds: 12, code: status === 429 ? 'RATE_LIMITED' : 'UNAVAILABLE' });
+  expect(h.fetch).toHaveBeenCalledTimes(1); expect(String((h.fetch.mock.calls as unknown as [string, RequestInit][])[0][0])).toContain('/functions/v1/online-api');
 });

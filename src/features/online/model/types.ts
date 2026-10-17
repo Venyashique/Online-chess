@@ -44,6 +44,7 @@ export interface OnlinePlayerRepository extends OnlineGameRepository {
     choice: CreatorColorChoice,
     token: string,
     signal?: AbortSignal,
+    turnstileToken?: string,
   ): Promise<PlayerSessionRecord>;
   loadSession(
     id: string,

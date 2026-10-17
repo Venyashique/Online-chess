@@ -25,18 +25,31 @@ export function restorePlayerSession(session: PlayerSessionRecord, id: string) {
 export type OnlinePlayerSession = ReturnType<typeof restorePlayerSession>;
 
 export class OnlinePlayerService {
+  private pendingCreation?: { id: string; token: string; choice: CreatorColorChoice };
   constructor(
     private readonly repository: OnlinePlayerRepository,
     private readonly identity: PlayerIdentity,
   ) {}
-  async createGame(choice: CreatorColorChoice, signal?: AbortSignal) {
-    const id = crypto.randomUUID();
-    const token = this.identity.ensure(id); // Persist before requesting the seat.
-    return restorePlayerSession(
-      await this.repository.createWithSeat(id, choice, token, signal),
-      id,
-    );
+  async createGame(choice: CreatorColorChoice, signal?: AbortSignal, turnstileToken?: string) {
+    // Manual retry of an ambiguous/limited request keeps the same idempotency key.
+    let pending = this.pendingCreation;
+    if (!pending || pending.choice !== choice) {
+      const id = crypto.randomUUID();
+      pending = { id, token: this.identity.ensure(id), choice };
+      this.pendingCreation = pending;
+    }
+    try {
+      const restored = restorePlayerSession(
+        await this.repository.createWithSeat(pending.id, choice, pending.token, signal, turnstileToken), pending.id,
+      );
+      this.pendingCreation = undefined;
+      return restored;
+    } catch (error) {
+      if (error instanceof OnlineActionError && ['GAME_EXISTS', 'GAME_EXPIRED', 'INVALID_REQUEST'].includes(error.code)) this.pendingCreation = undefined;
+      throw error;
+    }
   }
+
   async loadGame(
     id: string,
     signal?: AbortSignal,

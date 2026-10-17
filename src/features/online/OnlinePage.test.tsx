@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
   act,
   render,
@@ -52,6 +53,7 @@ describe("Online UI with repository injection", () => {
       "random",
       expect.stringMatching(/^[0-9a-f]{64}$/),
       expect.any(AbortSignal),
+      "test-challenge",
     );
   });
 
@@ -174,3 +176,7 @@ describe("Online UI with repository injection", () => {
     expect(onCreated).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('./TurnstileChallenge', () => ({ TurnstileChallenge: ({ onToken, resetKey }: { onToken(token: string): void; resetKey: number }) => {
+  useEffect(() => onToken('test-challenge'), [onToken, resetKey]); return null;
+} }));

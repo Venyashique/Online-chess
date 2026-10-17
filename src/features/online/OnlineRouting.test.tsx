@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
@@ -45,3 +46,7 @@ it("navigates from lobby to a saved game URL and supports reopening that URL", a
   ).toContain(existingGameId);
   expect(document.title).toContain("Играть онлайн");
 });
+
+vi.mock('./TurnstileChallenge', () => ({ TurnstileChallenge: ({ onToken, resetKey }: { onToken(token: string): void; resetKey: number }) => {
+  useEffect(() => onToken('test-challenge'), [onToken, resetKey]); return null;
+} }));

@@ -24,6 +24,8 @@
   "include": [
     "src",
     "vite.config.ts",
-    "supabase/functions/submit-online-move/handler.ts"
+    "supabase/functions/submit-online-move/handler.ts",
+    "supabase/functions/online-api/handler.ts",
+    "supabase/functions/_shared"
   ]
 }

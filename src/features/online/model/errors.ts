@@ -1,4 +1,9 @@
 const messages: Record<string, string> = {
+  RATE_LIMITED: "Слишком много запросов. Подождите перед повторной попыткой.",
+  CAPACITY_REACHED: "Создание новых партий временно ограничено. Уже начатые партии доступны.",
+  CAPTCHA_REQUIRED: "Пройдите проверку перед созданием партии.",
+  CAPTCHA_INVALID: "Проверка истекла или не принята. Пройдите её заново.",
+  GAME_EXPIRED: "Срок хранения партии истёк. Создайте новую партию.",
   NOT_FOUND: "Партия не найдена.",
   GAME_FULL: "Оба места уже заняты. Вы можете просматривать партию.",
   LEGACY_READ_ONLY:
@@ -16,7 +21,11 @@ const messages: Record<string, string> = {
     "Не удалось подтвердить ход. Проверьте подключение и обновите партию.",
 };
 export class OnlineActionError extends Error {
-  constructor(readonly code: string) {
+  constructor(readonly code: string, readonly retryAfterSeconds?: number) {
     super(messages[code] ?? messages.UNAVAILABLE);
   }
+}
+
+export function retryDelay(error: unknown): number {
+  return error instanceof OnlineActionError ? error.retryAfterSeconds ?? (["RATE_LIMITED", "CAPACITY_REACHED", "UNAVAILABLE"].includes(error.code) ? 5 : 0) : 0;
 }

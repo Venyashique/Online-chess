@@ -1,3 +1,4 @@
+import { TurnstileChallenge } from './TurnstileChallenge';
 import type { OnlineRealtimeClient } from "./realtime/types";
 import { PromotionDialog } from "../../shared/chess/ui/PromotionDialog";
 import type { PlayerIdentity } from "./identity/PlayerIdentityStore";
@@ -33,6 +34,8 @@ export function OnlinePage({
 } = {}) {
   const session = useOnlineGame(repository, gameId, onCreated, identity, realtime);
   const [color, setColor] = useState<CreatorColorChoice>("white");
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [challengeReset, setChallengeReset] = useState(0);
   const [copyStatus, setCopyStatus] = useState("");
   const game = session.game;
   const pairs = game
@@ -77,7 +80,9 @@ export function OnlinePage({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              void session.createGame(color);
+              if (!turnstileToken) return;
+              void session.createGame(color, turnstileToken);
+              setTurnstileToken(null); setChallengeReset(value => value + 1);
             }}
           >
             <label htmlFor="creator-color">Цвет создателя</label>
@@ -93,10 +98,12 @@ export function OnlinePage({
               <option value="black">Чёрные</option>
               <option value="random">Случайный цвет</option>
             </select>
+            <TurnstileChallenge onToken={setTurnstileToken} resetKey={challengeReset} />
+            <p className="online-small">Неактивные партии имеют ограниченный срок хранения. Срок задаётся сервером.</p>
             <button
               type="submit"
               className="online-primary"
-              disabled={!repository || session.creating}
+              disabled={!repository || session.creating || session.cooldown || !turnstileToken}
             >
               {session.creating ? "Создаём партию…" : "Создать партию"}
             </button>
@@ -121,7 +128,7 @@ export function OnlinePage({
             <button
               type="button"
               className="online-text-button"
-              disabled={!!session.action || session.phase === "loading"}
+              disabled={session.cooldown || !!session.action || session.phase === "loading"}
               onClick={session.reload}
             >
               Повторить загрузку
@@ -213,7 +220,7 @@ export function OnlinePage({
                                 type="button"
                                 className="online-primary"
                                 disabled={
-                                  !!session.action ||
+                                  !!session.action || session.cooldown ||
                                   session.phase === "loading"
                                 }
                                 onClick={() => void session.joinGame()}
@@ -257,7 +264,7 @@ export function OnlinePage({
                 <button
                   type="button"
                   className="online-text-button"
-                  disabled={!!session.action || session.phase === "loading"}
+                  disabled={session.cooldown || !!session.action || session.phase === "loading"}
                   onClick={session.reload}
                 >
                   Обновить позицию

@@ -4,3 +4,7 @@ project_id = "online-chess"
 # mandatory seat-token authorization via SQL; no Supabase Auth account is used.
 [functions.submit-online-move]
 verify_jwt = false
+
+# No account JWT is required: operations use seat credentials and server limits.
+[functions.online-api]
+verify_jwt = false
