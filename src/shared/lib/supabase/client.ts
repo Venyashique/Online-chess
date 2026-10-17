@@ -9,20 +9,25 @@ type SupabaseEnvironment = {
 export function createBrowserSupabaseClient(
   env: SupabaseEnvironment = import.meta.env,
 ) {
-  const url = env.VITE_SUPABASE_URL?.trim();
+  const configuredUrl = env.VITE_SUPABASE_URL?.trim();
   const key = env.VITE_SUPABASE_ANON_KEY?.trim();
-  if (!url || !key) return null;
+  if (!configuredUrl || !key) return null;
+  let url: string;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(configuredUrl);
     if (
       !["https:", "http:"].includes(parsed.protocol) ||
       parsed.username ||
       parsed.password ||
       parsed.search ||
       parsed.hash ||
-      (parsed.pathname !== "/" && parsed.pathname !== "")
+      !["/", "", "/rest/v1", "/rest/v1/"].includes(parsed.pathname)
     )
       return null;
+    // The dashboard's Data API URL includes /rest/v1. The SDK needs the
+    // project root to build REST, Functions and Realtime endpoints itself.
+    // Accept only this exact suffix; never guess a different host or path.
+    url = parsed.origin;
   } catch {
     return null;
   }
