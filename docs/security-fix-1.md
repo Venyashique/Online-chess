@@ -198,3 +198,181 @@ Public Realtime still accepts untrusted version hints (M1); bounded authorized
 reads remain authoritative, but HTTP quotas do not cap WebSocket traffic.
 Seat-token revocation/recovery (M2) is a separate task. New CAPTCHA adds a third
 party and outage mode affecting creation, not existing gameplay.
+
+## Replay incident fix (migration 007, local only)
+
+Release candidate 0400b051 relied on provider single-use: Siteverify success alone
+allowed creation. Production smoke reported the same real proof accepted twice.
+The replacement must remain safe even if Siteverify returns success repeatedly.
+This is an application defense; the Cloudflare incident itself is not diagnosed
+by local provider adapters. No real keys/tokens were used in regression tests.
+
+### Durable burn and bounded storage
+
+The new handler awaits `online_api_admit`, then hashes the EXACT challenge string
+with Web Crypto SHA-256 and awaits `online_api_reserve_turnstile` in a separate
+RPC transaction BEFORE Siteverify. Only the winner proceeds. A lost response,
+provider denial/timeout, failed creation or actual creation SQL rollback never
+releases a committed reservation. Missing proofs create no registry entry.
+Existing-game owner restoration still uses admission's recognized session path;
+this creates no new game and does not require another proof.
+
+`online_security.turnstile_uses` stores only the 32-byte proof hash, random
+reservation UUID, game UUID, SHA-256 player credential binding and timestamps.
+There is NO game FK: game deletion cannot release a proof. There is no raw
+challenge/player credential or IP in this table or in application logs.
+
+The central policy adds defaults/hard safety bounds:
+
+| Setting | Default | Allowed |
+| --- | --- | --- |
+| turnstile_ttl_seconds | 600 | 600..3600 |
+| turnstile_capacity | 2048 | 1..100000 |
+| turnstile_cleanup_batch | 128 | 1..1000 |
+| turnstile_max_age_seconds | 240 | 1..240 |
+| turnstile_future_skew_seconds | 30 | 0..30 |
+
+Registry admission deletes at most one batch of expired rows, checks duplicates
+and capacity, then inserts, under a dedicated transaction advisory lock. Both
+reservation and final creation acquire that lock first; creation then locks
+policy/reservation in a fixed order. PostgreSQL wall-clock time is sampled AFTER
+waits. The primary key is an additional duplicate barrier. Never evict a live
+reservation to admit new traffic. Capacity/SQL/malformed response failures close
+creation with 503; no automatic mutation retry. No Cron is necessary. Without
+traffic expired rows remain but row count is bounded. PostgreSQL autovacuum still
+needs normal operational monitoring; a row bound is not a physical disk quota.
+This registry cleanup does NOT delete games or enable game retention deletion.
+
+### Mandatory proof of reservation
+
+007 moves the existing quota-aware creation implementation into owner-only
+`online_security.create_game_unchecked`; even service_role cannot execute it.
+`online_api_create(uuid,text,text)` becomes an unconditional UNAVAILABLE stub,
+so stale deployed Functions cannot continue to create without reservations.
+`online_api_create_reserved(uuid,text,text,uuid,timestamptz)` requires matching
+unexpired, unused reservation/game/player binding. It checks freshness AFTER
+locks and again AFTER creation/trigger waits. Expiry during creation raises a
+generic SQL exception, rolling back the entire game/quota/outbox transaction;
+the earlier reservation burn and attempt counter remain committed.
+Reservation consumption and successful game creation commit atomically.
+All new public entrypoints are service-role-only; private tables have RLS, no
+browser/service table grants; every definer has an empty search_path.
+
+Frontend already clears/resets its challenge at submission. Regression testing
+requires a replacement proof after rejection, with no automatic creation retry.
+There is no frontend production-code change or new secret in this fix.
+
+### Timestamp/TTL trust boundary
+
+Siteverify must return valid UTC `challenge_ts`, exact hostname and action
+`create_game`, in addition to boolean success. Edge hard ceilings are age <=240s
+and future skew <=30s; DB may tighten them and rechecks at finalization. Even if
+an old hash has expired and been cleaned, its old challenge_ts is invalid.
+Freshness uses strict timestamp parsing (no normalized invalid calendar dates),
+not the time the server received the token. All nodes need healthy clocks.
+
+Finite TTL cannot provide lifetime token uniqueness if the provider returns a
+NEW current challenge_ts for the SAME old opaque token. That behavior lies beyond
+this bounded registry's trust assumptions. If observed, pause creation and resolve
+provider behavior; do not extend acceptance or disable freshness checks.
+A stolen token can be burned first by someone else, causing that challenge to
+fail; the legitimate user must complete a new challenge. Registry exhaustion is
+a bounded denial of new creation, not unbounded DB growth. Existing global
+attempt quotas remain ahead of reservation but provider Edge invocation costs
+still require operational limits.
+
+### Required native evidence
+
+Run `scripts/check-online-native.mjs` against a freshly provisioned disposable
+PostgreSQL/PostgREST fixture with 001..005 and 007 (explicitly NO 006), the updated
+policy defaults, and the unchanged Deno entrypoints. Provider adapter accepts
+`native-valid-proof:<unique-suffix>` repeatedly, returning current challenge_ts.
+The fixture must NOT call Cloudflare or any real Supabase. Existing runner guards
+still require private DB, loopback gateway and matching UUID markers. Reset also
+truncates the scratch proof registry. Never use this runner with production.
+
+New native scenarios cover six identical-proof requests with different game IDs,
+capacity races, concurrent bounded expired cleanup, actual creation rollback,
+registry ACL failure, old-server RPC denial, six concurrent finalizations with
+binding/freshness checks, and expiry DURING a blocked INSERT trigger. Existing
+move CAS, burst, counters, retention, FK lock-cycle and deadlock tests also run.
+
+### Exact staged rollout (SEPARATE production authorization required)
+
+1. Keep rollout paused. Confirm actual 004/005 installation, current Function
+   versions and backup. Do not modify 004/005 or deploy old RC 0400b051.
+2. After review, apply ONLY `202610170007_online_turnstile_replay.sql` to the
+   existing 004/005 database. 006 is deliberately skipped and remains pending.
+   Do not run blanket db push. Record this explicit migration ordering in the
+   deployment tool's migration history, preserving the unapplied 006 status.
+3. Run the read-only checks below. Old online_api_create MUST return UNAVAILABLE
+   for every argument set. Stale online-api instances now fail new creation with
+   503; reads/join/moves remain available. Legacy PUBLIC RPC are STILL open and
+   H1 is STILL NOT CLOSED. If checks fail, keep creation closed and fix forward;
+   never restore the unchecked public helper or old creation implementation.
+4. Deploy only the replay-aware online-api from the new reviewed commit with its
+   pinned Deno config/lock. No new secrets: use existing Turnstile secret and exact
+   hostname allowlist. Do not deploy submit-online-move/frontend for this fix unless
+   separate changes require it; this fix changes neither public request format nor
+   move entrypoint. If deployment fails, leave the old create stub fail-closed.
+5. Controlled production smoke with fresh proof: first new-game create succeeds;
+   SAME proof with another UUID/player must return CAPTCHA_INVALID and create
+   nothing. Repeat with a small concurrent pair. Do not retry Cloudflare tokens
+   for actual gameplay; generate fresh challenges. Confirm owner restore, join,
+   read, spectator, move, Realtime and reconnect still work; no credentials in logs.
+6. Verify bounded registry occupancy/expiry using aggregates only. No game DELETE
+   and no Cron. If failure occurs, keep creation closed; do not remove the registry
+   or re-enable unchecked creation. Revert Function only to a version that honors
+   reservation, or accept the old version's 503 behind the stub.
+7. Only after replay/provider findings and full game smoke are reviewed, request
+   separate authorization for the final 006 cutover. This fix neither applies nor
+   automatically authorizes it. Legacy clients can bypass quotas/CAPTCHA until 006.
+
+Read-only SQL after 007 (no actual credentials or arbitrary RPC invocations):
+
+```sql
+select column_name, data_type
+from information_schema.columns
+where table_schema='online_security' and table_name='turnstile_uses'
+order by ordinal_position;
+
+select turnstile_ttl_seconds,turnstile_capacity,turnstile_cleanup_batch,
+       turnstile_max_age_seconds,turnstile_future_skew_seconds
+from online_security.policy where singleton;
+
+select count(*) as total,
+       count(*) filter (where expires_at<=clock_timestamp()) as expired,
+       count(*) filter (where consumed_at is not null) as consumed
+from online_security.turnstile_uses;
+
+select relrowsecurity from pg_class
+where oid='online_security.turnstile_uses'::regclass;
+
+select p.oid::regprocedure as signature,p.prosecdef,p.proconfig,
+       has_function_privilege('anon',p.oid,'execute') as anon_execute,
+       has_function_privilege('authenticated',p.oid,'execute') as authenticated_execute,
+       has_function_privilege('service_role',p.oid,'execute') as service_execute
+from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where (n.nspname='public' and p.proname in
+ ('online_api_create','online_api_create_reserved','online_api_reserve_turnstile'))
+   or (n.nspname='online_security' and p.proname='create_game_unchecked');
+-- Public functions: definer=true, empty search_path, false/false/true.
+-- Private unchecked helper: false/false/false EXECUTE.
+
+select pg_get_functiondef('public.online_api_create(uuid,text,text)'::regprocedure);
+-- Must contain only unconditional UNAVAILABLE, no call to creation helper.
+
+select role_name,has_table_privilege(role_name,
+ 'online_security.turnstile_uses','select,insert,update,delete') as table_access
+from (values ('anon'),('authenticated'),('service_role')) as r(role_name);
+-- All false (the table has no public policies).
+```
+
+Local verification of this fix: 225 unit/integration/UI tests (23 files), 30/30
+native Deno 2.9.6 + PostgreSQL 17.11/PostgREST 13.0.7 scenarios, zero new native
+PostgreSQL deadlocks, both frozen native deno checks, runtime permission probes,
+TypeScript (frontend and Edge), production build and diff whitespace checks pass.
+The native provider deliberately accepts the same proof repeatedly; no real
+Cloudflare/Supabase was contacted. 006 was not applied in this verification.
+Build retains the existing >500 kB JS chunk warning. Local fixtures were stopped
+and their disposable Docker containers/network removed after verification.

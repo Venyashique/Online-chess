@@ -29,7 +29,7 @@ const post=async(port,body)=>{
   return {status:r.status,body:await r.json(),retry:r.headers.get('retry-after'),cache:r.headers.get('cache-control')};
 };
 const api=(action,id,t=null,extra={})=>post(config.apiPort,{action,game_id:id,player_token:t,...extra});
-const create=(id=randomUUID(),a=token())=>api('create',id,a,{color_choice:'white',turnstile_token:'native-valid-proof'});
+const create=(id=randomUUID(),a=token())=>api('create',id,a,{color_choice:'white',turnstile_token:'native-valid-proof:'+randomUUID()});
 const move=(g,extra={})=>post(config.movePort,{game_id:g.id,player_token:g.a,expected_version:2,from:'e2',to:'e4',...extra});
 const game=async(joined=true)=>{
   const g={id:randomUUID(),a:token(),b:token()};
@@ -41,7 +41,7 @@ const policy=async(values)=>{
   for(const [name,value]of Object.entries(values)){assert.ok(name in config.defaults);await pool.query(`update online_security.policy set ${name}=$1`,[value]);}
 };
 const reset=async()=>{
-  await pool.query('truncate public.online_games cascade; truncate online_security.buckets,online_security.move_bursts,realtime.test_outbox;');
+  await pool.query('truncate public.online_games cascade; truncate online_security.buckets,online_security.move_bursts,online_security.turnstile_uses,realtime.test_outbox;');
   const {singleton,...values}=config.defaults;await policy(values);
 };
 const waitFor=async(fn,label,timeout=3000)=>{const end=Date.now()+timeout;while(Date.now()<end){if(await fn())return;await sleep(20);}throw new Error('Barrier timeout: '+label);};
@@ -61,8 +61,8 @@ await test('native servers, independent PostgreSQL backends and full gameplay',a
   const read=await api('read',g.id,g.a);assert.equal(read.body.session.player_color,'w');
   assert.ok(!JSON.stringify(read.body).includes(g.a));assert.ok(!JSON.stringify(read.body).includes('token_hash'));
   const old=await fetch(config.url+'/rest/v1/rpc/get_online_game_session',{method:'POST',headers:{authorization:'Bearer '+config.anonKey,'content-type':'application/json'},body:JSON.stringify({p_id:g.id,p_token:null})});
-  assert.ok([401,403].includes(old.status));
-  return {independentConnections:4,version:4,oldRpcDenied:true};
+  assert.equal(old.status,200,'006 is intentionally not applied in this replay fixture');
+  return {independentConnections:4,version:4,legacyRpcStillOpen:true};
 });
 await test('parallel create global minute quota',async()=>{
   await policy({create_minute:2});
@@ -229,6 +229,93 @@ await test('cleanup remains read-only under concurrent reads',async()=>{
   const previews=await Promise.all(Array.from({length:4},()=>q('select public.online_cleanup_preview(10) as result')));
   assert.ok(previews.every(r=>r[0].result.dry_run===true));assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,1);return {previews:4,rowsPreserved:1};
 });
+
+// Replay tests deliberately use a provider adapter that accepts every valid
+// fixture proof repeatedly. Our database, not provider single-use, is authority.
+await test('one provider-accepted proof, six independent concurrent games',async()=>{
+  const proof='native-valid-proof:'+randomUUID();
+  const responses=await Promise.all(Array.from({length:6},()=>api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof})));
+  assert.deepEqual(countCodes(responses),{OK:1,CAPTCHA_INVALID:5});
+  assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,1);
+  const rows=await q("select octet_length(token_hash) as hash_bytes,octet_length(player_token_hash) as player_bytes,consumed_at is not null as consumed from online_security.turnstile_uses");
+  assert.deepEqual(rows,[{hash_bytes:32,player_bytes:32,consumed:true}]);
+  assert.equal((await api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof})).status,400);
+  return {requests:6,games:1,replayDenied:true};
+});
+await test('concurrent replay registry capacity is a hard bound',async()=>{
+  await policy({turnstile_capacity:2});
+  const responses=await Promise.all(Array.from({length:6},()=>create()));
+  assert.deepEqual(countCodes(responses),{OK:2,UNAVAILABLE:4});
+  assert.equal((await q('select count(*)::int as n from online_security.turnstile_uses'))[0].n,2);
+  return countCodes(responses);
+});
+await test('concurrent bounded cleanup never evicts live reservations or deletes games',async()=>{
+  await policy({turnstile_capacity:3,turnstile_cleanup_batch:1});
+  const games=await Promise.all(Array.from({length:3},()=>game(false)));
+  await pool.query("update online_security.turnstile_uses set reserved_at=clock_timestamp()-interval '1200 seconds',expires_at=clock_timestamp()-interval '1 second'");
+  const responses=await Promise.all(Array.from({length:6},()=>create()));
+  assert.deepEqual(countCodes(responses),{OK:3,UNAVAILABLE:3});
+  assert.equal((await q('select count(*)::int as n from online_security.turnstile_uses'))[0].n,3);
+  assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,games.length+3);
+  return {liveReservations:3,preservedGames:6};
+});
+await test('creation SQL rollback does not roll back previously committed proof burn',async()=>{
+  const proof='native-valid-proof:'+randomUUID();
+  await pool.query("create function public.native_replay_rollback() returns trigger language plpgsql as $$ begin raise exception 'Isolated rollback'; end; $$; create trigger zz_native_replay_rollback after insert on public.online_games for each row execute function public.native_replay_rollback();");
+  try{assert.equal((await api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof})).status,503);}
+  finally{await pool.query('drop trigger zz_native_replay_rollback on public.online_games;drop function public.native_replay_rollback()');}
+  assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,0);
+  assert.deepEqual(await q('select consumed_at from online_security.turnstile_uses'),[{consumed_at:null}]);
+  assert.equal((await api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof})).status,400);
+  assert.equal((await q("select hits from online_security.buckets where key='attempt:create'"))[0].hits,2);
+  return {gameRolledBack:true,proofAndCountersPreserved:true};
+});
+await test('registry SQL permission failure fails closed',async()=>{
+  await pool.query('revoke execute on function public.online_api_reserve_turnstile(text,uuid,text) from service_role');
+  try{assert.equal((await create()).status,503);assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,0);}
+  finally{await pool.query('grant execute on function public.online_api_reserve_turnstile(text,uuid,text) to service_role');}
+  assert.equal((await create()).status,200);return {registryFailure:503};
+});
+await test('old server create RPC is fail closed while legacy cutover remains deferred',async()=>{
+  const [r]=await q('select public.online_api_create($1,$2,$3) as result',[randomUUID(),'white',token()]);
+  assert.deepEqual(r.result,{code:'UNAVAILABLE'});
+  for(const role of ['anon','authenticated']){
+    const [acl]=await q("select has_function_privilege($1,'public.create_online_game_with_seat(uuid,text,text)','execute') as legacy,has_function_privilege($1,'public.online_api_reserve_turnstile(text,uuid,text)','execute') as reserve,has_function_privilege($1,'public.online_api_create_reserved(uuid,text,text,uuid,timestamptz)','execute') as create",[role]);
+    assert.deepEqual(acl,{legacy:true,reserve:false,create:false});
+  }
+  return {oldServerCreateDenied:true,migration006NotApplied:true};
+});
+await test('reservation finalization has one winner, binding and freshness checks',async()=>{
+  const id=randomUUID(),a=token(),hash=randomBytes(32).toString('hex');
+  const [{result:r}]=await q('select public.online_api_reserve_turnstile($1,$2,$3) as result',[hash,id,a]);assert.equal(r.code,'OK');
+  const at=new Date().toISOString();
+  const finalize=(gid=id,t=a,ts=at)=>q('select public.online_api_create_reserved($1,$2,$3,$4,$5) as result',[gid,'white',t,r.reservation_id,ts]);
+  for(const result of [await finalize(randomUUID()),await finalize(id,token()),await finalize(id,a,new Date(Date.now()-241000).toISOString()),await finalize(id,a,new Date(Date.now()+31000).toISOString())])assert.equal(result[0].result.code,'CAPTCHA_INVALID');
+  const responses=await Promise.all(Array.from({length:6},()=>finalize()));
+  const codes=countCodes(responses.map(rows=>({body:rows[0].result})));
+  assert.deepEqual(codes,{OK:1,CAPTCHA_INVALID:5});return codes;
+});
+await test('challenge crossing age limit inside creation rolls back game, retains burn',async()=>{
+  await policy({turnstile_max_age_seconds:1});
+  const key=17000702,gate=await pool.connect();let pending;
+  await pool.query(`create function public.native_replay_wait() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(${key});return new;end;$$;create trigger zz_native_replay_wait after insert on public.online_games for each row execute function public.native_replay_wait();`);
+  const proof='native-valid-proof:'+randomUUID();
+  try{
+    await gate.query('select pg_advisory_lock($1)',[key]);
+    pending=api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof});
+    await waitFor(async()=>Number((await q("select count(*)::int as n from pg_stat_activity where usename='authenticator' and wait_event='advisory' and query like '%online_api_create_reserved%'"))[0].n)>0,'creation blocked inside trigger');
+    await sleep(1300);await gate.query('select pg_advisory_unlock($1)',[key]);
+    assert.equal((await pending).status,503);
+    assert.equal((await q('select count(*)::int as n from public.online_games'))[0].n,0);
+    assert.deepEqual(await q('select consumed_at from online_security.turnstile_uses'),[{consumed_at:null}]);
+  }finally{
+    await gate.query('select pg_advisory_unlock_all()');if(pending)await pending.catch(()=>{});gate.release();
+    await pool.query('drop trigger zz_native_replay_wait on public.online_games;drop function public.native_replay_wait()');
+  }
+  assert.equal((await api('create',randomUUID(),token(),{color_choice:'white',turnstile_token:proof})).status,400);
+  return {expiredDuringMutation:true,rolledBack:true,burnRetained:true};
+});
+
 await sleep(1100); // PostgreSQL statistics flush asynchronously.
 await pool.query('select pg_stat_clear_snapshot()');
 const finalDeadlocks=Number((await pool.query('select deadlocks from pg_stat_database where datname=current_database()')).rows[0].deadlocks);

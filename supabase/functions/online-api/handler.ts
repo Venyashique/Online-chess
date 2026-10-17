@@ -1,8 +1,9 @@
 import { admit, type LimitedBackend } from '../_shared/limiter.ts';
 import { corsHeaders, object, readBody, reply, validId, validToken } from '../_shared/http.ts';
-import type { ChallengeResult } from '../_shared/turnstile.ts';
+import { hashTurnstileToken, freshChallengeTimestamp, type ChallengeResult } from '../_shared/turnstile.ts';
 export interface OnlineApiBackend extends LimitedBackend {
-  create(id: string, choice: string, token: string): Promise<unknown>;
+  reserveTurnstile(hash: string, id: string, token: string): Promise<unknown>;
+  create(id: string, choice: string, token: string, reservation: string, challengeTs: string): Promise<unknown>;
   join(id: string, token: string): Promise<unknown>;
 }
 export function createOnlineApiHandler(backend: OnlineApiBackend, verify: (token: string | undefined) => Promise<ChallengeResult>) {
@@ -25,11 +26,22 @@ export function createOnlineApiHandler(backend: OnlineApiBackend, verify: (token
         if (!object(admission.session)) return reply('UNAVAILABLE');
         return reply('OK', { session: admission.session });
       }
+      let reservation: string | undefined;
+      let challengeTs: string | undefined;
       if (operation === 'create') {
-        const challenge = await verify(body.turnstile_token as string | undefined);
-        if (challenge !== 'OK') return reply(challenge);
+        const proof = body.turnstile_token as string | undefined;
+        if (!proof) return reply('CAPTCHA_REQUIRED');
+        // A separate awaited RPC commits the burn BEFORE the external call.
+        const reserved = object(await backend.reserveTurnstile(await hashTurnstileToken(proof), id, token!));
+        if (reserved?.code === 'CAPTCHA_INVALID') return reply('CAPTCHA_INVALID');
+        if (reserved?.code !== 'OK' || !validId(reserved.reservation_id)) return reply('UNAVAILABLE');
+        reservation = reserved.reservation_id;
+        const challenge = await verify(proof);
+        if (typeof challenge === 'string') return reply(['CAPTCHA_REQUIRED','CAPTCHA_INVALID','UNAVAILABLE'].includes(challenge) ? challenge : 'UNAVAILABLE');
+        if (!challenge || challenge.code !== 'OK' || !freshChallengeTimestamp(challenge.challengeTs)) return reply('UNAVAILABLE');
+        challengeTs = challenge.challengeTs;
       }
-      const result = object(operation === 'create' ? await backend.create(id, body.color_choice as string, token!) : await backend.join(id, token!));
+      const result = object(operation === 'create' ? await backend.create(id, body.color_choice as string, token!, reservation!, challengeTs!) : await backend.join(id, token!));
       if (!result || typeof result.code !== 'string') return reply('UNAVAILABLE');
       if (result.code === 'OK' && !object(result.session)) return reply('UNAVAILABLE');
       return reply(result.code, { ...(result.session ? { session: result.session } : {}), ...(result.retry_after ? { retry_after: result.retry_after } : {}) });

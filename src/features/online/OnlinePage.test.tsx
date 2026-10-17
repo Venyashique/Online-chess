@@ -22,7 +22,9 @@ import {
   playerSessionFixture,
 } from "../../test/onlineFixtures";
 
+const challengeControl = vi.hoisted(() => ({ automaticReplacement: true }));
 beforeEach(() => {
+  challengeControl.automaticReplacement = true;
   localStorage.clear();
   vi.spyOn(crypto, "randomUUID").mockReturnValue(existingGameId);
 });
@@ -120,6 +122,22 @@ describe("Online UI with repository injection", () => {
     ).toBeEnabled();
   });
 
+  it("burns a submitted challenge, requires a fresh proof and never auto-retries creation", async () => {
+    challengeControl.automaticReplacement = false;
+    const user = userEvent.setup(), repo = repository();
+    vi.mocked(repo.createWithSeat).mockRejectedValue(new Error("Проверка отклонена"));
+    const view = render(<OnlinePage repository={repo} />);
+    await user.click(screen.getByRole("button", { name: "Создать партию" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Проверка отклонена");
+    const button = screen.getByRole("button", { name: "Создать партию" });
+    // Mocked widget emits once, before submission. Reset invalidates it and
+    // deliberately does not emit a replacement until explicitly requested.
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(repo.createWithSeat).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
   it("copies the invitation and refreshes explicitly", async () => {
     const user = userEvent.setup();
     const repo = repository();
@@ -178,5 +196,5 @@ describe("Online UI with repository injection", () => {
 });
 
 vi.mock('./TurnstileChallenge', () => ({ TurnstileChallenge: ({ onToken, resetKey }: { onToken(token: string): void; resetKey: number }) => {
-  useEffect(() => onToken('test-challenge'), [onToken, resetKey]); return null;
+  useEffect(() => { if (resetKey === 0 || challengeControl.automaticReplacement) onToken('test-challenge'); }, [onToken, resetKey]); return null;
 } }));

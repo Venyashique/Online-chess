@@ -14,11 +14,11 @@ let stageGrants: unknown[];
 let preservedId: string;
 const A = 'a'.repeat(64), B = 'b'.repeat(64), X = 'c'.repeat(64);
 const backend = () => createOnlineBackend({ rpc: async (name, args) => ({ data: await d.rpc(name, args, 'service_role'), error: null }) });
-const verify = vi.fn(async () => 'OK' as const);
+const verify = vi.fn(async () => ({ code: 'OK' as const, challengeTs: new Date().toISOString() }));
 const api = (body: unknown) => createOnlineApiHandler(backend(), verify)(new Request('https://isolated.test', { method: 'POST', body: JSON.stringify(body) }));
 const request = (action: string, id: string, token: string | null = A, extra = {}) => api({ action, game_id: id, player_token: token, ...extra });
 const create = async () => {
-  const id = crypto.randomUUID(); const r = await request('create', id, A, { color_choice: 'white', turnstile_token: 'isolated-proof' });
+  const id = crypto.randomUUID(); const r = await request('create', id, A, { color_choice: 'white', turnstile_token: crypto.randomUUID() });
   expect(r.status).toBe(200); return id;
 };
 const join = (id: string) => request('join', id, B);
@@ -29,10 +29,10 @@ beforeAll(async () => {
   d = await createOnlineTestDatabase({ limits: false }); await enableTestBroadcast(d.db);
   preservedId = crypto.randomUUID();
   await d.rpc('create_online_game_with_seat', { p_id: preservedId, p_color_choice: 'white', p_token: A });
-  for (const name of ['202610170004_online_api_limits.sql', '202610170005_online_retention.sql']) await d.db.exec(readFileSync(new URL('../../../../supabase/migrations/' + name, import.meta.url), 'utf8'));
+  for (const name of ['202610170004_online_api_limits.sql', '202610170005_online_retention.sql', '202610170007_online_turnstile_replay.sql']) await d.db.exec(readFileSync(new URL('../../../../supabase/migrations/' + name, import.meta.url), 'utf8'));
   defaults = (await q('select * from online_security.policy'))[0];
   stageGrants = await q("select has_function_privilege('anon','public.create_online_game_with_seat(uuid,text,text)','execute') as allowed");
-  await d.db.exec(readFileSync(new URL('../../../../supabase/migrations/202610170006_online_api_cutover.sql', import.meta.url), 'utf8'));
+  // 006 intentionally NOT applied: replay rollout must preserve legacy grants.
 }, 30000);
 beforeEach(async () => {
   verify.mockClear();
@@ -41,15 +41,18 @@ beforeEach(async () => {
 });
 afterAll(async () => { await d?.db.close(); });
 describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', () => {
-  it('preserves old grants through 004/005 and closes all old RPC only at cutover', async () => {
+  it('preserves legacy grants through 007 without applying cutover and closes new RPC to browsers', async () => {
     expect(stageGrants).toEqual([{ allowed: true }]);
     for (const role of ['anon','authenticated']) {
-      for (const name of ['create_online_game','create_online_game_with_seat','get_online_game','get_online_game_session','join_online_game','commit_online_move','online_api_admit','online_api_create','online_api_join','online_api_commit_move','online_cleanup_preview']) {
+      for (const name of ['commit_online_move','online_api_admit','online_api_create','online_api_create_reserved','online_api_reserve_turnstile','online_api_join','online_api_commit_move','online_cleanup_preview']) {
         const rows = await q('select has_function_privilege($1,p.oid,\'execute\') as allowed from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname=\'public\' and p.proname=$2', [role,name]);
         expect(rows).toEqual([{ allowed: false }]);
       }
       await expect(d.db.transaction(async tx => { await tx.exec(`set local role ${role}`); await tx.exec('select * from online_security.buckets'); })).rejects.toMatchObject({ code: '42501' });
-      await expect(d.rpc('get_online_game_session', { p_id: preservedId, p_token: A }, role as 'anon' | 'authenticated')).rejects.toMatchObject({ code: '42501' });
+      expect((await d.rpc('get_online_game_session', { p_id: preservedId, p_token: A }, role as 'anon' | 'authenticated')).game.id).toBe(preservedId);
+      for (const name of ['create_online_game','create_online_game_with_seat','get_online_game','get_online_game_session','join_online_game']) {
+        const [r] = await q("select has_function_privilege($1,p.oid,'execute') as allowed from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=$2",[role,name]); expect(r.allowed).toBe(true);
+      }
       await expect(d.rpc('online_api_admit', { p_operation: 'read', p_id: preservedId, p_token: A }, role as 'anon' | 'authenticated')).rejects.toMatchObject({ code: '42501' });
       await expect(d.db.transaction(async tx => { await tx.exec(`set local role ${role}`); await tx.exec('select creator_token_hash,opponent_token_hash from public.online_games'); })).rejects.toMatchObject({ code: '42501' });
       await expect(d.db.transaction(async tx => { await tx.exec(`set local role ${role}`); await tx.query('update public.online_games set version=version+1 where id=$1', [preservedId]); })).rejects.toMatchObject({ code: '42501' });
@@ -60,9 +63,9 @@ describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', 
     const body = await r.json(); expect(body.session.player_color).toBe('w'); expect(body.session.game.id).toBe(preservedId);
     expect(JSON.stringify(body)).not.toContain(A); expect(JSON.stringify(body)).not.toContain('token_hash');
   });
-  it('retains cross-game authorization, strict API input, version conflicts and one-winner races after cutover', async () => {
+  it('retains cross-game authorization, strict API input, version conflicts and one-winner races with replay protection', async () => {
     const id = await create(); await join(id);
-    const other = crypto.randomUUID(); await request('create', other, X, { color_choice: 'white', turnstile_token: 'proof' });
+    const other = crypto.randomUUID(); await request('create', other, X, { color_choice: 'white', turnstile_token: crypto.randomUUID() });
     const cross = await d.handler(new Request('https://isolated.test', { method: 'POST', body: JSON.stringify({ game_id: other, player_token: A, expected_version: 1, from: 'e2', to: 'e4' }) })); expect(cross.status).toBe(403);
     expect((await request('read', id, A, { player_color: 'b' })).status).toBe(400);
     const responses = await Promise.all([move(id), move(id, { from: 'd2', to: 'd4' })]); expect(responses.map(r => r.status).sort()).toEqual([200,409]);
@@ -77,22 +80,22 @@ describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', 
   it('serializes global creation cap and idempotent concurrent requests across handlers', async () => {
     await policy('create_minute=2');
     const ids = [crypto.randomUUID(),crypto.randomUUID(),crypto.randomUUID()];
-    const responses = await Promise.all(ids.map(id => request('create', id, A, { color_choice: 'white', turnstile_token: 'proof' })));
+    const responses = await Promise.all(ids.map(id => request('create', id, A, { color_choice: 'white', turnstile_token: crypto.randomUUID() })));
     expect(responses.map(r => r.status).sort()).toEqual([200,200,429]);
     const successful = ids[responses.findIndex(r => r.status === 200)];
     verify.mockClear(); const retry = await request('create', successful, A, { color_choice: 'white' });
     expect(retry.status).toBe(200); expect(verify).not.toHaveBeenCalled();
     expect((await q("select hits from online_security.buckets where key='created:minute'"))[0].hits).toBe(2);
     const same = crypto.randomUUID(); await policy('create_minute=10');
-    const sameResponses = await Promise.all([1,2].map(() => request('create',same,A,{color_choice:'white',turnstile_token:'proof'})));
+    const sameResponses = await Promise.all([1,2].map(() => request('create',same,A,{color_choice:'white',turnstile_token:crypto.randomUUID()})));
     expect(sameResponses.map(r=>r.status)).toEqual([200,200]); expect((await q('select count(*)::int as n from public.online_games where id=$1',[same]))[0].n).toBe(1);
   });
   it('enforces UTC-day and inventory caps without consuming successful-create quotas on rejection', async () => {
     await policy('create_day=1'); const id = await create();
-    const denied = await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:'proof'});
+    const denied = await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:crypto.randomUUID()});
     expect(denied.status).toBe(429); expect((await q("select hits from online_security.buckets where key='created:minute'"))[0].hits).toBe(1);
     const n = (await q('select count(*)::int as n from public.online_games'))[0].n; await policy(`stored_games=${n}`);
-    expect((await (await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:'proof'})).json()).code).toBe('CAPACITY_REACHED');
+    expect((await (await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:crypto.randomUUID()})).json()).code).toBe('CAPACITY_REACHED');
     expect((await request('create',id,A,{color_choice:'white'})).status).toBe(200);
   });
   it('counts failed requests independently of later validation and database rollback', async () => {
@@ -152,7 +155,7 @@ describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', 
       const id = crypto.randomUUID();
       const b = { ...backend(), create: vi.fn(), join: vi.fn() };
       const handler = createOnlineApiHandler(b, async () => failure);
-      const response = await handler(new Request('https://isolated.test', { method: 'POST', body: JSON.stringify({ action: 'create', game_id: id, player_token: A, color_choice: 'white', turnstile_token: 'proof' }) }));
+      const response = await handler(new Request('https://isolated.test', { method: 'POST', body: JSON.stringify({ action: 'create', game_id: id, player_token: A, color_choice: 'white', turnstile_token: crypto.randomUUID() }) }));
       expect(response.status).toBe(failure === 'UNAVAILABLE' ? 503 : 400);
       expect(b.create).not.toHaveBeenCalled();
       expect(await q('select id from public.online_games where id=$1', [id])).toEqual([]);
@@ -163,7 +166,7 @@ describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', 
   it('does not derive quota identity from spoofable IP or browser headers', async () => {
     await policy('create_attempts_minute=1');
     const handler = createOnlineApiHandler(backend(), async () => 'CAPTCHA_INVALID');
-    const call = (ip: string, browser: string) => handler(new Request('https://isolated.test', { method: 'POST', headers: { 'x-forwarded-for': ip, 'cf-connecting-ip': ip, 'x-browser-id': browser }, body: JSON.stringify({ action: 'create', game_id: crypto.randomUUID(), player_token: A, color_choice: 'white', turnstile_token: 'proof' }) }));
+    const call = (ip: string, browser: string) => handler(new Request('https://isolated.test', { method: 'POST', headers: { 'x-forwarded-for': ip, 'cf-connecting-ip': ip, 'x-browser-id': browser }, body: JSON.stringify({ action: 'create', game_id: crypto.randomUUID(), player_token: A, color_choice: 'white', turnstile_token: crypto.randomUUID() }) }));
     expect((await call('192.0.2.1', 'one')).status).toBe(400);
     expect((await call('192.0.2.2', 'two')).status).toBe(429);
     expect(await q('select key from online_security.buckets')).toEqual([{ key: 'attempt:create' }]);
@@ -188,8 +191,8 @@ describe('Security Fix 1: exact migrations, SQL quotas and real HTTP handlers', 
   });
   it('separates creation floods from ongoing games and join is idempotent', async () => {
     const id = await create(); await join(id); const version=(await (await request('read',id,A)).json()).session.game.version;
-    await policy('create_attempts_minute=1'); await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:'proof'});
-    expect((await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:'proof'})).status).toBe(429);
+    await policy('create_attempts_minute=1'); await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:crypto.randomUUID()});
+    expect((await request('create',crypto.randomUUID(),A,{color_choice:'white',turnstile_token:crypto.randomUUID()})).status).toBe(429);
     expect((await join(id)).status).toBe(200); expect((await (await request('read',id,A)).json()).session.game.version).toBe(version);
     expect((await move(id)).status).toBe(200);
   });
@@ -261,8 +264,8 @@ describe('Turnstile: server verification only',()=>{
     const verify=createTurnstileVerifier('secret',['chess.test'],fetcher);expect(await verify(undefined)).toBe('CAPTCHA_REQUIRED');expect(await verify('x'.repeat(2049))).toBe('CAPTCHA_INVALID');expect(await verify('proof')).toBe('UNAVAILABLE');
   });
   it('sends secret only to fixed Siteverify endpoint, never sends raw IP',async()=>{
-    const fetcher=vi.fn(async()=>new Response(JSON.stringify({success:true,hostname:'chess.test',action:'create_game'})));
-    expect(await createTurnstileVerifier('secret',['chess.test'],fetcher as typeof fetch)('proof')).toBe('OK');
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({success:true,hostname:'chess.test',action:'create_game',challenge_ts:new Date().toISOString()})));
+    expect(await createTurnstileVerifier('secret',['chess.test'],fetcher as typeof fetch)('proof')).toMatchObject({code:'OK'});
     const [url,options]=fetcher.mock.calls[0] as unknown as [string,RequestInit];expect(url).toBe('https://challenges.cloudflare.com/turnstile/v0/siteverify');expect(JSON.parse(String(options.body))).toEqual({secret:'secret',response:'proof'});
   });
   it('rejects a slow request body without accessing limiter',async()=>{
